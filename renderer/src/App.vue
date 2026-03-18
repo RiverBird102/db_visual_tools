@@ -55,38 +55,49 @@
       </el-header>
 
       <el-main class="main">
-        <el-tabs v-model="activeTab" type="card" class="tabs" @tab-remove="removeTab">
-          <el-tab-pane label="表结构" name="designer">
-            <table-designer
-              :connection-id="activeConnection?.id || ''"
-              :schema="activeSchema"
-              :table="activeTable"
-              @sqlGenerated="(sql) => (generatedSql = sql)"
-            />
-          </el-tab-pane>
-          <el-tab-pane label="SQL预览" name="sql">
-            <el-input v-model="generatedSql" type="textarea" :rows="18" placeholder="这里会显示生成的DDL SQL"></el-input>
-            <div style="margin-top: 10px;">
-              <el-button type="primary" :disabled="!activeConnection || !generatedSql.trim()" @click="runGenerated">
-                执行SQL
-              </el-button>
-            </div>
-          </el-tab-pane>
+        <div v-if="openTabs.length === 0" class="empty-workspace">
+          <el-empty description="请在左侧点击表名以打开，或新建查询开始工作" />
+        </div>
 
+        <el-tabs 
+          v-else 
+          v-model="activeTab" 
+          type="card" 
+          class="tabs" 
+          @tab-remove="removeTab"
+          @tab-change="handleTabChange"
+        >
           <el-tab-pane
-            v-for="tab in queryTabs"
+            v-for="tab in openTabs"
             :key="tab.id"
             :label="tab.title"
             :name="tab.id"
             closable
           >
-            <div class="runner">
+            <div v-if="tab.type === 'table'" class="tab-content-scroll">
+              <table-designer
+                :connection-id="tab.connectionId"
+                :schema="tab.schema"
+                :table="tab.table"
+                @sqlGenerated="(sql) => (tab.generatedSql = sql)"
+              />
+              
+              <div v-if="tab.generatedSql" class="sql-preview-area">
+                <div class="sql-header">SQL 预览 (DDL)</div>
+                <el-input v-model="tab.generatedSql" type="textarea" :rows="5" placeholder="DDL SQL"></el-input>
+                <div style="margin-top: 10px;">
+                  <el-button type="primary" @click="runGenerated(tab)">执行 SQL</el-button>
+                </div>
+              </div>
+            </div>
+
+            <div v-else-if="tab.type === 'query'" class="runner">
               <div class="runner-left">
                 <div class="editor-wrap">
-                  <sql-editor v-model="tab.sql" :connection="activeConnection" :key="tab.id"></sql-editor>
+                  <sql-editor v-model="tab.sql" :connection="getConnectionById(tab.connectionId)" :key="tab.id"></sql-editor>
                 </div>
                 <div class="runner-actions">
-                  <el-button type="primary" :disabled="!activeConnection" @click="executeSqlForTab(tab)">执行SQL</el-button>
+                  <el-button type="primary" @click="executeSqlForTab(tab)">执行SQL</el-button>
                   <el-button @click="tab.sql = ''" style="margin-left: 8px;">清空</el-button>
                 </div>
               </div>
@@ -112,41 +123,41 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import DbConnect from './components/DbConnect.vue';
 import SqlEditor from './components/SqlEditor.vue';
 import DataViewer from './components/DataViewer.vue';
-// import SchemaExplorer from './components/SchemaExplorer.vue'; // 已废弃，不再需要
 import TableDesigner from './components/TableDesigner.vue';
 
-// 响应式数据
+// 基础状态
 const showConnectDialog = ref(false);
-const activeConnection = ref(null);
 const isEditMode = ref(false);
 const currentEditData = ref(null);
 const loading = ref(false);
-const errorMessage = ref('');
-const queryResult = ref({ rows: [], fields: [] });
 
+// 面包屑状态
+const activeConnection = ref(null);
 const activeSchema = ref('');
 const activeTable = ref('');
-const activeTab = ref('designer');
-const generatedSql = ref('');
-const queryTabs = ref([]);
 
-// 【新增】级联树的核心状态
+// 【新增】统一的标签页管理
+const openTabs = ref([]); // 存放所有打开的标签页（表 和 查询）
+const activeTab = ref(''); // 当前激活的标签页 ID
+
+// 树结构状态
 const treeRenderKey = ref(0); 
 const allConnections = ref([]); 
 const treeProps = reactive({
   label: 'label',
   children: 'children',
-  isLeaf: 'isLeaf' // 告诉树哪些节点可以展开，哪些是叶子节点
+  isLeaf: 'isLeaf'
 });
 
-// 【修改】加载连接（现在只负责触发树的重新渲染）
+// 辅助方法：通过ID获取连接详情
+const getConnectionById = (id) => allConnections.value.find(c => c.id === id);
+
 const loadConnections = async () => {
   treeRenderKey.value += 1; 
 };
 
-// 【核心新增】懒加载树节点的逻辑
+// 懒加载树节点
 const loadTreeNode = async (node, resolve) => {
-  // 级别 0：加载所有的数据库连接
   if (node.level === 0) {
     const res = await window.electronAPI.getDbConnections();
     if (res.success) {
@@ -156,14 +167,13 @@ const loadTreeNode = async (node, resolve) => {
         label: conn.name,
         type: 'connection',
         treeId: `conn_${conn.id}`,
-        isLeaf: false // 连接下面还有库，不是叶子
+        isLeaf: false
       }));
       return resolve(nodes);
     }
     return resolve([]);
   }
 
-  // 级别 1：加载选中连接下的所有的 Schema (库)
   if (node.level === 1) {
     const conn = node.data;
     try {
@@ -175,19 +185,14 @@ const loadTreeNode = async (node, resolve) => {
           connectionId: conn.id,
           schemaName: schema,
           treeId: `schema_${conn.id}_${schema}`,
-          isLeaf: false // 库下面还有表，不是叶子
+          isLeaf: false
         }));
         return resolve(nodes);
-      } else {
-        ElMessage.error(`获取数据库失败: ${res.error}`);
-        return resolve([]);
       }
-    } catch (error) {
-      return resolve([]);
-    }
+    } catch (error) {}
+    return resolve([]);
   }
 
-  // 级别 2：加载选中 Schema 下的所有的 Table (表)
   if (node.level === 2) {
     const schemaData = node.data;
     try {
@@ -205,140 +210,81 @@ const loadTreeNode = async (node, resolve) => {
             schemaName: schemaData.schemaName,
             tableName: tableName,
             treeId: `table_${schemaData.connectionId}_${schemaData.schemaName}_${tableName}`,
-            isLeaf: true // 表是最后一级，所以是叶子节点
+            isLeaf: true
           };
         });
         return resolve(nodes);
-      } else {
-        ElMessage.error(`获取表失败: ${res.error}`);
-        return resolve([]);
       }
-    } catch (error) {
-      return resolve([]);
-    }
+    } catch (error) {}
+    return resolve([]);
   }
-
   return resolve([]);
 };
 
-// 【修改】处理树节点的点击事件（根据点击的层级做出不同反应）
+// 【核心逻辑】点击左侧树节点
 const handleNodeClick = (data, node) => {
-  if (data.type === 'connection') {
-    activeConnection.value = allConnections.value.find(c => c.id === data.id);
-  } else if (data.type === 'schema') {
-    activeConnection.value = allConnections.value.find(c => c.id === data.connectionId);
+  // 无论是点连接、库还是表，都更新顶部工具栏的 activeConnection
+  if (data.connectionId || data.id) {
+    activeConnection.value = getConnectionById(data.connectionId || data.id);
+  }
+
+  if (data.type === 'schema') {
     activeSchema.value = data.schemaName;
-  } else if (data.type === 'table') {
-    activeConnection.value = allConnections.value.find(c => c.id === data.connectionId);
+    activeTable.value = '';
+  } 
+  else if (data.type === 'table') {
     activeSchema.value = data.schemaName;
     activeTable.value = data.tableName;
-    activeTab.value = 'designer'; // 自动切换到表结构标签页
-  }
-};
-
-// 新建连接弹窗
-const openCreateDialog = () => {
-  isEditMode.value = false;
-  currentEditData.value = null;
-  showConnectDialog.value = true;
-};
-
-// 编辑连接弹窗
-const openEditDialog = (data) => {
-  isEditMode.value = true;
-  currentEditData.value = { ...data };
-  showConnectDialog.value = true;
-};
-
-// 保存连接
-const saveConnection = async (connection) => {
-  try {
-    if (isEditMode.value && currentEditData.value) {
-      connection.id = currentEditData.value.id;
-      // 强行断开后端缓存，确保修改立即生效（沿用上一次的修复逻辑）
-      if (window.electronAPI.disconnectDb) {
-        await window.electronAPI.disconnectDb(connection.id);
-      }
-      
-      const result = await window.electronAPI.updateDbConnection(JSON.parse(JSON.stringify(connection)));
-      if (!result.success) {
-        ElMessage.error(`保存失败: ${result.error}`);
-        return;
-      }
-      if (activeConnection.value && activeConnection.value.id === connection.id) {
-        activeConnection.value = null; // 清空右侧，强制重新点击
-        activeSchema.value = '';
-        activeTable.value = '';
-      }
-    } else {
-      connection.id = Date.now().toString();
-      const result = await window.electronAPI.saveDbConnection(JSON.parse(JSON.stringify(connection)));
-      if (!result.success) {
-        ElMessage.error(`保存失败: ${result.error}`);
-        return;
-      }
-    }
-
-    ElMessage.success(isEditMode.value ? '连接修改成功！' : '连接保存成功！');
-    showConnectDialog.value = false;
-    await loadConnections(); // 重新加载树
-  } catch (error) {
-    ElMessage.error(`保存异常: ${error.message}`);
-  }
-};
-
-// 删除连接
-const deleteConnection = async (data) => {
-  try {
-    await ElMessageBox.confirm(`确定要删除数据库连接 "${data.name}" 吗？`, '警告', {
-      confirmButtonText: '确定删除',
-      cancelButtonText: '取消',
-      type: 'warning',
-    });
     
-    const result = await window.electronAPI.deleteDbConnection(data.id);
-    if (result.success) {
-      ElMessage.success('删除成功！');
-      if (activeConnection.value && activeConnection.value.id === data.id) {
-        activeConnection.value = null;
-        activeSchema.value = '';
-        activeTable.value = '';
-      }
-      await loadConnections();
+    // 生成该表的唯一标签 ID
+    const tabId = `table_${data.connectionId}_${data.schemaName}_${data.tableName}`;
+    
+    // 检查这个表是不是已经打开了
+    const existingTab = openTabs.value.find(t => t.id === tabId);
+    if (existingTab) {
+      activeTab.value = tabId; // 如果打开了，直接切换过去
     } else {
-      ElMessage.error(`删除失败: ${result.error}`);
+      // 如果没打开，新建一个表标签页
+      openTabs.value.push({
+        id: tabId,
+        type: 'table', // 标识这是一个表标签页
+        title: `📄 ${data.tableName}`,
+        connectionId: data.connectionId,
+        schema: data.schemaName,
+        table: data.tableName,
+        generatedSql: '' // 独立保存当前表生成的 SQL
+      });
+      activeTab.value = tabId;
     }
-  } catch (e) {
-    //取消删除
   }
 };
 
-// 测试连接
-const testConnection = async (config) => {
-  try {
-    loading.value = true;
-    const plain = JSON.parse(JSON.stringify(config));
-    const result = await window.electronAPI.testDbConnection(plain);
-    if (result.success) {
-      ElMessage.success('连接测试成功！');
+// 切换标签页时，同步更新顶部的面包屑导航
+const handleTabChange = (tabId) => {
+  const tab = openTabs.value.find(t => t.id === tabId);
+  if (tab) {
+    activeConnection.value = getConnectionById(tab.connectionId);
+    if (tab.type === 'table') {
+      activeSchema.value = tab.schema;
+      activeTable.value = tab.table;
     } else {
-      ElMessage.error(`连接测试失败: ${result.error}`);
+      activeSchema.value = '';
+      activeTable.value = '';
     }
-  } catch (error) {
-    ElMessage.error(`连接测试失败: ${error.message}`);
-  } finally {
-    loading.value = false;
   }
 };
-
 
 const nextQueryIndex = ref(1);
 
+// 新建查询标签页
 const addQueryTab = () => {
-  const id = `query-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  queryTabs.value.push({
+  if (!activeConnection.value) return;
+  const id = `query-${Date.now()}`;
+  openTabs.value.push({
     id,
-    title: `查询${nextQueryIndex.value++}`,
+    type: 'query', // 标识这是一个查询标签页
+    title: `🔍 查询${nextQueryIndex.value++}`,
+    connectionId: activeConnection.value.id,
     sql: '',
     loading: false,
     error: '',
@@ -347,32 +293,37 @@ const addQueryTab = () => {
   activeTab.value = id;
 };
 
-const removeTab = (name) => {
-  const idx = queryTabs.value.findIndex(t => t.id === name);
+// 关闭标签页
+const removeTab = (targetId) => {
+  const idx = openTabs.value.findIndex(t => t.id === targetId);
   if (idx === -1) return;
-  const wasActive = activeTab.value === name;
-  queryTabs.value.splice(idx, 1);
+  
+  const wasActive = activeTab.value === targetId;
+  openTabs.value.splice(idx, 1);
+  
+  // 如果关掉的是当前正在看的标签，自动往前跳一个标签
   if (wasActive) {
-    const next = queryTabs.value[idx] || queryTabs.value[idx - 1];
-    activeTab.value = next ? next.id : 'designer';
+    const next = openTabs.value[idx] || openTabs.value[idx - 1];
+    if (next) {
+      activeTab.value = next.id;
+      handleTabChange(next.id); // 触发面包屑更新
+    } else {
+      activeTab.value = ''; // 如果全关了，回到空白页
+      activeTable.value = '';
+    }
   }
 };
 
+// 执行查询
 const executeSqlForTab = async (tab) => {
-  if (!activeConnection.value) {
-    ElMessage.warning('请先选择数据库连接');
-    return;
-  }
   const sql = (tab.sql || '').trim();
-  if (!sql) {
-    ElMessage.warning('请输入SQL语句');
-    return;
-  }
+  if (!sql) return ElMessage.warning('请输入SQL语句');
+  
   try {
     tab.loading = true;
     tab.error = '';
     const result = await window.electronAPI.executeSql({
-      connectionId: activeConnection.value.id,
+      connectionId: tab.connectionId, // 使用该标签绑定的连接
       sql
     });
     if (!result.success) {
@@ -387,36 +338,90 @@ const executeSqlForTab = async (tab) => {
   }
 };
 
-const runGenerated = async () => {
-  if (!activeConnection.value) return;
+// 执行表结构设计器生成的 DDL SQL
+const runGenerated = async (tab) => {
   try {
-    loading.value = true;
-    errorMessage.value = '';
     const result = await window.electronAPI.executeSql({
-      connectionId: activeConnection.value.id,
-      sql: generatedSql.value
+      connectionId: tab.connectionId,
+      sql: tab.generatedSql
     });
     if (!result.success) {
-      errorMessage.value = result.error;
       ElMessage.error(`执行失败: ${result.error}`);
       return;
     }
-    ElMessage.success('执行成功');
-    queryResult.value = result.data || { rows: [], fields: [] };
-    addQueryTab();
-    const tab = queryTabs.value.find(t => t.id === activeTab.value);
-    if (tab) tab.result = queryResult.value;
+    ElMessage.success('SQL 执行成功！');
+    // 执行成功后可以清空预览框
+    tab.generatedSql = ''; 
   } catch (e) {
     ElMessage.error(`执行失败: ${e.message}`);
+  }
+};
+
+// ================= 弹窗与连接管理（保持原有逻辑） =================
+const openCreateDialog = () => {
+  isEditMode.value = false;
+  currentEditData.value = null;
+  showConnectDialog.value = true;
+};
+
+const openEditDialog = (data) => {
+  isEditMode.value = true;
+  currentEditData.value = { ...data };
+  showConnectDialog.value = true;
+};
+
+const saveConnection = async (connection) => {
+  try {
+    if (isEditMode.value && currentEditData.value) {
+      connection.id = currentEditData.value.id;
+      if (window.electronAPI.disconnectDb) await window.electronAPI.disconnectDb(connection.id);
+      
+      const result = await window.electronAPI.updateDbConnection(JSON.parse(JSON.stringify(connection)));
+      if (!result.success) return ElMessage.error(`保存失败: ${result.error}`);
+    } else {
+      connection.id = Date.now().toString();
+      const result = await window.electronAPI.saveDbConnection(JSON.parse(JSON.stringify(connection)));
+      if (!result.success) return ElMessage.error(`保存失败: ${result.error}`);
+    }
+    ElMessage.success(isEditMode.value ? '连接修改成功！' : '连接保存成功！');
+    showConnectDialog.value = false;
+    await loadConnections(); 
+  } catch (error) {
+    ElMessage.error(`保存异常: ${error.message}`);
+  }
+};
+
+const deleteConnection = async (data) => {
+  try {
+    await ElMessageBox.confirm(`确定要删除数据库连接 "${data.name}" 吗？`, '警告', { type: 'warning' });
+    const result = await window.electronAPI.deleteDbConnection(data.id);
+    if (result.success) {
+      ElMessage.success('删除成功！');
+      // 关闭所有属于这个连接的标签页
+      openTabs.value = openTabs.value.filter(t => t.connectionId !== data.id);
+      if (!openTabs.value.find(t => t.id === activeTab.value)) {
+        activeTab.value = openTabs.value.length > 0 ? openTabs.value[openTabs.value.length-1].id : '';
+      }
+      await loadConnections();
+    } else {
+      ElMessage.error(`删除失败: ${result.error}`);
+    }
+  } catch (e) {}
+};
+
+const testConnection = async (config) => {
+  try {
+    loading.value = true;
+    const plain = JSON.parse(JSON.stringify(config));
+    const result = await window.electronAPI.testDbConnection(plain);
+    if (result.success) ElMessage.success('连接测试成功！');
+    else ElMessage.error(`连接测试失败: ${result.error}`);
+  } catch (error) {
+    ElMessage.error(`测试失败: ${error.message}`);
   } finally {
     loading.value = false;
   }
 };
-
-// 初始化：默认不执行什么，只要 treeRenderKey 是 0 就会自动触发 lazy load 第一层
-onMounted(() => {
-  // 不再需要手动 loadConnections()，因为 lazy=true 的 el-tree 挂载后会自动调用 loadTreeNode(level 0)
-});
 </script>
 
 <style scoped>
@@ -431,7 +436,6 @@ onMounted(() => {
   border-bottom: 1px solid var(--el-border-color);
 }
 .connection-tree {
-  /* 去除写死的高度，让它填满左边栏 */
   flex: 1;
   padding: 8px;
   overflow: auto;
@@ -445,27 +449,51 @@ onMounted(() => {
 }
 .crumb { margin-left: 10px; color: var(--el-text-color-secondary); }
 .main { padding: 10px; height: calc(100vh - 60px); }
+
+/* 【新增】空白工作区样式 */
+.empty-workspace {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--el-fill-color-light);
+  border-radius: 8px;
+}
+
 .tabs { height: 100%; }
+
+/* 【新增】为表结构内容提供滚动区域 */
+.tab-content-scroll {
+  height: calc(100vh - 130px);
+  overflow-y: auto;
+  padding-right: 5px;
+}
+
+/* 【新增】内置 SQL 预览区域样式 */
+.sql-preview-area {
+  margin-top: 20px;
+  padding: 15px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  background-color: var(--el-bg-color-overlay);
+}
+.sql-header {
+  font-weight: bold;
+  margin-bottom: 10px;
+  color: var(--el-text-color-primary);
+}
+
 .runner {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
-  height: calc(100vh - 160px);
+  height: calc(100vh - 130px);
 }
 .runner-left, .runner-right { min-height: 0; }
-.runner-left {
-  display: flex;
-  flex-direction: column;
-}
-.editor-wrap {
-  flex: 1;
-  min-height: 0;
-}
-.runner-actions {
-  margin-top: 10px;
-}
+.runner-left { display: flex; flex-direction: column; }
+.editor-wrap { flex: 1; min-height: 0; }
+.runner-actions { margin-top: 10px; }
 
-/* 树节点自定义样式 */
 .custom-tree-node {
   flex: 1;
   display: flex;
@@ -473,7 +501,6 @@ onMounted(() => {
   justify-content: space-between;
   font-size: 14px;
   padding-right: 8px;
-  /* 防止文字太长撑破布局 */
   overflow: hidden; 
 }
 .node-label {
@@ -483,13 +510,6 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 默认隐藏操作按钮 */
-.node-actions {
-  display: none;
-  flex-shrink: 0;
-}
-/* 鼠标悬浮在树节点时，显示操作按钮 */
-:deep(.el-tree-node__content:hover) .node-actions {
-  display: inline-block;
-}
+.node-actions { display: none; flex-shrink: 0; }
+:deep(.el-tree-node__content:hover) .node-actions { display: inline-block; }
 </style>
