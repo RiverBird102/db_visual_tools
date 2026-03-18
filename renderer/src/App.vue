@@ -3,7 +3,16 @@
     <el-aside width="320px" class="left">
       <div class="sidebar">
         <div class="sidebar-header">
-          <el-button type="primary" style="width: 100%;" @click="openCreateDialog">新建连接</el-button>
+          <el-button type="primary" @click="openCreateDialog" class="header-btn">新建连接</el-button>
+          <el-button 
+            type="success" 
+            plain 
+            @click="addQueryTab" 
+            :disabled="!activeConnection" 
+            class="header-btn"
+          >
+            新建查询
+          </el-button>
         </div>
       </div>
       
@@ -49,14 +58,11 @@
           <el-tag v-if="activeConnection" type="info">{{ activeConnection.name }}</el-tag>
           <span v-if="activeTable" class="crumb">{{ activeSchema }} / {{ activeTable }}</span>
         </div>
-        <div class="topbar-right">
-          <el-button size="small" type="primary" @click="addQueryTab" :disabled="!activeConnection">新建查询</el-button>
-        </div>
-      </el-header>
+        </el-header>
 
       <el-main class="main">
         <div v-if="openTabs.length === 0" class="empty-workspace">
-          <el-empty description="请在左侧点击表名以打开，或新建查询开始工作" />
+          <el-empty description="请在左侧点击表名以查看数据，或新建查询开始工作" />
         </div>
 
         <el-tabs 
@@ -74,20 +80,29 @@
             :name="tab.id"
             closable
           >
-            <div v-if="tab.type === 'table'" class="tab-content-scroll">
-              <table-designer
-                :connection-id="tab.connectionId"
-                :schema="tab.schema"
-                :table="tab.table"
-                @sqlGenerated="(sql) => (tab.generatedSql = sql)"
-              />
-              
-              <div v-if="tab.generatedSql" class="sql-preview-area">
-                <div class="sql-header">SQL 预览 (DDL)</div>
-                <el-input v-model="tab.generatedSql" type="textarea" :rows="5" placeholder="DDL SQL"></el-input>
-                <div style="margin-top: 10px;">
-                  <el-button type="primary" @click="runGenerated(tab)">执行 SQL</el-button>
-                </div>
+            <div v-if="tab.type === 'table'" class="table-data-wrap">
+              <div class="table-data-toolbar">
+                <el-button type="primary" size="small" @click="loadTableData(tab)" :loading="tab.loading">刷新数据</el-button>
+                
+                <el-pagination
+                  v-model:current-page="tab.currentPage"
+                  v-model:page-size="tab.pageSize"
+                  :page-sizes="[50, 100, 200, 500]"
+                  layout="total, sizes, prev, pager, next, jumper"
+                  :total="tab.total"
+                  @size-change="loadTableData(tab)"
+                  @current-change="loadTableData(tab)"
+                  size="small"
+                  style="margin-left: auto;"
+                />
+              </div>
+              <div class="table-data-content">
+                <data-viewer
+                  :data="tab.result.rows"
+                  :columns="tab.result.fields"
+                  :loading="tab.loading"
+                  :error="tab.error"
+                ></data-viewer>
               </div>
             </div>
 
@@ -118,12 +133,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, reactive } from 'vue';
+import { ref, reactive } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import DbConnect from './components/DbConnect.vue';
 import SqlEditor from './components/SqlEditor.vue';
 import DataViewer from './components/DataViewer.vue';
-import TableDesigner from './components/TableDesigner.vue';
 
 // 基础状态
 const showConnectDialog = ref(false);
@@ -136,9 +150,9 @@ const activeConnection = ref(null);
 const activeSchema = ref('');
 const activeTable = ref('');
 
-// 【新增】统一的标签页管理
-const openTabs = ref([]); // 存放所有打开的标签页（表 和 查询）
-const activeTab = ref(''); // 当前激活的标签页 ID
+// 统一的标签页管理
+const openTabs = ref([]); 
+const activeTab = ref(''); 
 
 // 树结构状态
 const treeRenderKey = ref(0); 
@@ -149,7 +163,6 @@ const treeProps = reactive({
   isLeaf: 'isLeaf'
 });
 
-// 辅助方法：通过ID获取连接详情
 const getConnectionById = (id) => allConnections.value.find(c => c.id === id);
 
 const loadConnections = async () => {
@@ -221,9 +234,55 @@ const loadTreeNode = async (node, resolve) => {
   return resolve([]);
 };
 
-// 【核心逻辑】点击左侧树节点
+// 带分页的 loadTableData
+const loadTableData = async (tab) => {
+  tab.loading = true;
+  tab.error = '';
+  try {
+    const conn = getConnectionById(tab.connectionId);
+    let sql = '';
+    const offset = (tab.currentPage - 1) * tab.pageSize;
+    
+    // 1. 查询总条数 (用于分页器总数)
+    let countSql = conn.dbType === 'mysql'
+      ? `SELECT COUNT(*) as total FROM \`${tab.schema}\`.\`${tab.table}\``
+      : `SELECT COUNT(*) as total FROM "${tab.schema}"."${tab.table}"`;
+      
+    const countResult = await window.electronAPI.executeSql({
+      connectionId: tab.connectionId,
+      sql: countSql
+    });
+    
+    if (countResult.success && countResult.data.rows.length > 0) {
+      const row = countResult.data.rows[0];
+      tab.total = Number(row.total || row.TOTAL || Object.values(row)[0] || 0);
+    }
+
+    // 2. 查询当前页的数据 (加入 LIMIT 和 OFFSET)
+    if (conn.dbType === 'mysql') {
+      sql = `SELECT * FROM \`${tab.schema}\`.\`${tab.table}\` LIMIT ${tab.pageSize} OFFSET ${offset}`;
+    } else {
+      sql = `SELECT * FROM "${tab.schema}"."${tab.table}" LIMIT ${tab.pageSize} OFFSET ${offset}`;
+    }
+    
+    const result = await window.electronAPI.executeSql({
+      connectionId: tab.connectionId,
+      sql: sql
+    });
+    
+    if (!result.success) {
+      tab.error = result.error;
+      return;
+    }
+    tab.result = result.data || { rows: [], fields: [] };
+  } catch (e) {
+    tab.error = e.message;
+  } finally {
+    tab.loading = false;
+  }
+};
+
 const handleNodeClick = (data, node) => {
-  // 无论是点连接、库还是表，都更新顶部工具栏的 activeConnection
   if (data.connectionId || data.id) {
     activeConnection.value = getConnectionById(data.connectionId || data.id);
   }
@@ -236,30 +295,36 @@ const handleNodeClick = (data, node) => {
     activeSchema.value = data.schemaName;
     activeTable.value = data.tableName;
     
-    // 生成该表的唯一标签 ID
     const tabId = `table_${data.connectionId}_${data.schemaName}_${data.tableName}`;
-    
-    // 检查这个表是不是已经打开了
     const existingTab = openTabs.value.find(t => t.id === tabId);
+    
     if (existingTab) {
-      activeTab.value = tabId; // 如果打开了，直接切换过去
+      activeTab.value = tabId; 
     } else {
-      // 如果没打开，新建一个表标签页
-      openTabs.value.push({
+      const newTab = {
         id: tabId,
-        type: 'table', // 标识这是一个表标签页
+        type: 'table', 
         title: `📄 ${data.tableName}`,
         connectionId: data.connectionId,
         schema: data.schemaName,
         table: data.tableName,
-        generatedSql: '' // 独立保存当前表生成的 SQL
-      });
+        loading: false,
+        error: '',
+        result: { rows: [], fields: [] },
+        currentPage: 1, 
+        pageSize: 50,   
+        total: 0
+      };
+      
+      openTabs.value.push(newTab);
       activeTab.value = tabId;
+      
+      // 刚打开标签页时，自动触发一次数据查询
+      loadTableData(newTab);
     }
   }
 };
 
-// 切换标签页时，同步更新顶部的面包屑导航
 const handleTabChange = (tabId) => {
   const tab = openTabs.value.find(t => t.id === tabId);
   if (tab) {
@@ -276,13 +341,12 @@ const handleTabChange = (tabId) => {
 
 const nextQueryIndex = ref(1);
 
-// 新建查询标签页
 const addQueryTab = () => {
   if (!activeConnection.value) return;
   const id = `query-${Date.now()}`;
   openTabs.value.push({
     id,
-    type: 'query', // 标识这是一个查询标签页
+    type: 'query', 
     title: `🔍 查询${nextQueryIndex.value++}`,
     connectionId: activeConnection.value.id,
     sql: '',
@@ -293,7 +357,6 @@ const addQueryTab = () => {
   activeTab.value = id;
 };
 
-// 关闭标签页
 const removeTab = (targetId) => {
   const idx = openTabs.value.findIndex(t => t.id === targetId);
   if (idx === -1) return;
@@ -301,20 +364,18 @@ const removeTab = (targetId) => {
   const wasActive = activeTab.value === targetId;
   openTabs.value.splice(idx, 1);
   
-  // 如果关掉的是当前正在看的标签，自动往前跳一个标签
   if (wasActive) {
     const next = openTabs.value[idx] || openTabs.value[idx - 1];
     if (next) {
       activeTab.value = next.id;
-      handleTabChange(next.id); // 触发面包屑更新
+      handleTabChange(next.id);
     } else {
-      activeTab.value = ''; // 如果全关了，回到空白页
+      activeTab.value = ''; 
       activeTable.value = '';
     }
   }
 };
 
-// 执行查询
 const executeSqlForTab = async (tab) => {
   const sql = (tab.sql || '').trim();
   if (!sql) return ElMessage.warning('请输入SQL语句');
@@ -323,7 +384,7 @@ const executeSqlForTab = async (tab) => {
     tab.loading = true;
     tab.error = '';
     const result = await window.electronAPI.executeSql({
-      connectionId: tab.connectionId, // 使用该标签绑定的连接
+      connectionId: tab.connectionId, 
       sql
     });
     if (!result.success) {
@@ -338,26 +399,7 @@ const executeSqlForTab = async (tab) => {
   }
 };
 
-// 执行表结构设计器生成的 DDL SQL
-const runGenerated = async (tab) => {
-  try {
-    const result = await window.electronAPI.executeSql({
-      connectionId: tab.connectionId,
-      sql: tab.generatedSql
-    });
-    if (!result.success) {
-      ElMessage.error(`执行失败: ${result.error}`);
-      return;
-    }
-    ElMessage.success('SQL 执行成功！');
-    // 执行成功后可以清空预览框
-    tab.generatedSql = ''; 
-  } catch (e) {
-    ElMessage.error(`执行失败: ${e.message}`);
-  }
-};
-
-// ================= 弹窗与连接管理（保持原有逻辑） =================
+// ================= 弹窗与连接管理 =================
 const openCreateDialog = () => {
   isEditMode.value = false;
   currentEditData.value = null;
@@ -397,7 +439,6 @@ const deleteConnection = async (data) => {
     const result = await window.electronAPI.deleteDbConnection(data.id);
     if (result.success) {
       ElMessage.success('删除成功！');
-      // 关闭所有属于这个连接的标签页
       openTabs.value = openTabs.value.filter(t => t.connectionId !== data.id);
       if (!openTabs.value.find(t => t.id === activeTab.value)) {
         activeTab.value = openTabs.value.length > 0 ? openTabs.value[openTabs.value.length-1].id : '';
@@ -431,10 +472,19 @@ const testConnection = async (config) => {
   display: flex;
   flex-direction: column;
 }
+
+/* 【修改点 3】调整 sidebar-header 样式，让按钮使用 flex 并排显示 */
 .sidebar-header {
   padding: 10px;
   border-bottom: 1px solid var(--el-border-color);
+  display: flex;
+  gap: 10px; /* 两个按钮之间的间距 */
 }
+.header-btn {
+  flex: 1; /* 平分宽度 */
+  margin-left: 0 !important; /* 覆盖 el-button 的默认左边距 */
+}
+
 .connection-tree {
   flex: 1;
   padding: 8px;
@@ -450,7 +500,7 @@ const testConnection = async (config) => {
 .crumb { margin-left: 10px; color: var(--el-text-color-secondary); }
 .main { padding: 10px; height: calc(100vh - 60px); }
 
-/* 【新增】空白工作区样式 */
+/* 空白工作区样式 */
 .empty-workspace {
   height: 100%;
   display: flex;
@@ -462,25 +512,20 @@ const testConnection = async (config) => {
 
 .tabs { height: 100%; }
 
-/* 【新增】为表结构内容提供滚动区域 */
-.tab-content-scroll {
+.table-data-wrap {
+  display: flex;
+  flex-direction: column;
   height: calc(100vh - 130px);
-  overflow-y: auto;
-  padding-right: 5px;
 }
-
-/* 【新增】内置 SQL 预览区域样式 */
-.sql-preview-area {
-  margin-top: 20px;
-  padding: 15px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 6px;
-  background-color: var(--el-bg-color-overlay);
+.table-data-toolbar {
+  padding-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
 }
-.sql-header {
-  font-weight: bold;
-  margin-bottom: 10px;
-  color: var(--el-text-color-primary);
+.table-data-content {
+  flex: 1;
+  min-height: 0;
 }
 
 .runner {
