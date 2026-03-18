@@ -99,6 +99,37 @@ ipcMain.handle('db:test-connection', async (event, config) => {
   }
 });
 
+// 更新连接
+ipcMain.handle('db:update-connection', async (event, connection) => {
+  try {
+    if (!connection || !connection.id) throw new Error('连接参数不合法');
+    const connections = store.get('db.connections', []);
+    const index = connections.findIndex(item => item.id === connection.id);
+    if (index !== -1) {
+      connections[index] = connection;
+      store.set('db.connections', connections);
+      return { success: true, data: connections };
+    } else {
+      throw new Error('未找到要更新的连接');
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// 删除连接
+ipcMain.handle('db:delete-connection', async (event, id) => {
+  try {
+    if (!id) throw new Error('ID不能为空');
+    let connections = store.get('db.connections', []);
+    connections = connections.filter(item => item.id !== id);
+    store.set('db.connections', connections);
+    return { success: true, data: connections };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('db:execute-sql', async (event, { connectionId, sql }) => {
   try {
     if (!connectionId) throw new Error('connectionId不能为空');

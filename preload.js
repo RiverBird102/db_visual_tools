@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   // 数据库相关
   saveDbConnection: (connection) => ipcRenderer.invoke('db:save-connection', connection),
+  updateDbConnection: (connection) => ipcRenderer.invoke('db:update-connection', connection),
+  deleteDbConnection: (id) => ipcRenderer.invoke('db:delete-connection', id),
   getDbConnections: () => ipcRenderer.invoke('db:get-connections'),
   testDbConnection: (config) => ipcRenderer.invoke('db:test-connection', config),
   executeSql: (params) => ipcRenderer.invoke('db:execute-sql', params),

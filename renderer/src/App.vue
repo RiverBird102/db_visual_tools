@@ -2,7 +2,7 @@
   <el-container class="app-root">
     <el-aside width="300px" class="left">
       <div class="sidebar-header">
-        <el-button type="primary" @click="showConnectDialog = true">新建连接</el-button>
+        <el-button type="primary" @click="openCreateDialog">新建连接</el-button>
       </div>
 
       <el-tree
@@ -12,7 +12,17 @@
         highlight-current
         @node-click="handleNodeClick"
         class="connection-tree"
-      />
+      >
+        <template #default="{ node, data }">
+          <div class="custom-tree-node">
+            <span>{{ node.label }}</span>
+            <span class="node-actions" @click.stop>
+              <el-button link type="primary" size="small" @click.stop="openEditDialog(data)">编辑</el-button>
+              <el-button link type="danger" size="small" @click.stop="deleteConnection(data)">删除</el-button>
+            </span>
+          </div>
+        </template>
+      </el-tree>
 
       <div class="schema-panel" v-if="activeConnection">
         <schema-explorer
@@ -22,11 +32,15 @@
         />
       </div>
 
-      <el-dialog title="新建数据库连接" v-model="showConnectDialog" width="600px">
-        <db-connect @save="saveConnection" @test="testConnection"></db-connect>
+      <el-dialog :title="isEditMode ? '编辑数据库连接' : '新建数据库连接'" v-model="showConnectDialog" width="600px">
+        <db-connect 
+          :initial-data="currentEditData" 
+          @save="saveConnection" 
+          @test="testConnection"
+          @revert-fallback="handleFallback" 
+        ></db-connect>
       </el-dialog>
     </el-aside>
-
     <el-container class="right">
       <el-header class="topbar">
         <div class="topbar-left">
@@ -92,7 +106,7 @@
 
 <script setup>
 import { ref, onMounted, reactive } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import DbConnect from './components/DbConnect.vue';
 import SqlEditor from './components/SqlEditor.vue';
 import DataViewer from './components/DataViewer.vue';
@@ -102,6 +116,8 @@ import TableDesigner from './components/TableDesigner.vue';
 // 响应式数据
 const showConnectDialog = ref(false);
 const activeConnection = ref(null);
+const isEditMode = ref(false);
+const currentEditData = ref(null);
 const loading = ref(false);
 const errorMessage = ref('');
 const queryResult = ref({ rows: [], fields: [] });
@@ -132,19 +148,76 @@ const loadConnections = async () => {
   }
 };
 
-// 保存新连接
+// 新建连接弹窗
+const openCreateDialog = () => {
+  isEditMode.value = false;
+  currentEditData.value = null;
+  showConnectDialog.value = true;
+};
+
+// 编辑连接弹窗
+const openEditDialog = (data) => {
+  isEditMode.value = true;
+  currentEditData.value = { ...data }; // 深拷贝，防止直接修改原对象
+  showConnectDialog.value = true;
+};
+
+// 改造原有的 saveConnection 方法
 const saveConnection = async (connection) => {
   try {
-    const result = await window.electronAPI.saveDbConnection({
-      id: Date.now().toString(),
-      ...connection
-    });
+    let result;
+    if (isEditMode.value) {
+      // 执行更新
+      result = await window.electronAPI.updateDbConnection(connection);
+    } else {
+      // 执行新增
+      result = await window.electronAPI.saveDbConnection({
+        id: Date.now().toString(),
+        ...connection
+      });
+    }
+
     if (result.success) {
       showConnectDialog.value = false;
+      ElMessage.success(isEditMode.value ? '连接更新成功！' : '连接保存成功！');
       await loadConnections();
+      
+      // 如果编辑的是当前正在使用的连接，更新一下信息
+      if (activeConnection.value && activeConnection.value.id === connection.id) {
+        activeConnection.value = { ...connection };
+      }
+    } else {
+      ElMessage.error(`保存失败: ${result.error}`);
     }
   } catch (error) {
     console.error('保存连接失败:', error);
+  }
+};
+
+// 新增删除连接方法
+const deleteConnection = async (data) => {
+  try {
+    await ElMessageBox.confirm(`确定要删除数据库连接 "${data.name}" 吗？`, '警告', {
+      confirmButtonText: '确定删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    });
+    
+    const result = await window.electronAPI.deleteDbConnection(data.id);
+    if (result.success) {
+      ElMessage.success('删除成功！');
+      // 如果删除的是当前选中的连接，清空右侧工作区
+      if (activeConnection.value && activeConnection.value.id === data.id) {
+        activeConnection.value = null;
+        activeSchema.value = '';
+        activeTable.value = '';
+      }
+      await loadConnections();
+    } else {
+      ElMessage.error(`删除失败: ${result.error}`);
+    }
+  } catch (e) {
+    // 用户点击了取消，不做处理
   }
 };
 
@@ -207,6 +280,23 @@ const removeTab = (name) => {
     const next = queryTabs.value[idx] || queryTabs.value[idx - 1];
     activeTab.value = next ? next.id : 'designer';
   }
+};
+
+// ====== 在 App.vue 的 script 区域随便找个空白处添加 ======
+
+// 处理用户点击“取消并回退至默认MySQL”的逻辑
+const handleFallback = (fallbackData) => {
+  // 1. 强制退出编辑模式，把它当做一个“新建”流程
+  isEditMode.value = false; 
+  
+  // 2. 清除当前正在编辑的 ID，确保下次点保存是“新增”而不是“覆盖修改”
+  currentEditData.value = null; 
+  
+  // 提示用户
+  ElMessage.info('已回退到固化的默认MySQL连接信息');
+  
+  // 注意：我们这里没有写 showConnectDialog.value = false;
+  // 所以弹窗会继续保持开启状态！完全符合你的要求。
 };
 
 const executeSqlForTab = async (tab) => {
@@ -317,5 +407,23 @@ onMounted(async () => {
 }
 .runner-actions {
   margin-top: 10px;
+}
+
+/* 树节点自定义样式 */
+.custom-tree-node {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  padding-right: 8px;
+}
+/* 默认隐藏操作按钮 */
+.node-actions {
+  display: none;
+}
+/* 鼠标悬浮在树节点时，显示操作按钮 */
+:deep(.el-tree-node__content:hover) .node-actions {
+  display: inline-block;
 }
 </style>
