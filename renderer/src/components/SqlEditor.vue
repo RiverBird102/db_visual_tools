@@ -46,6 +46,15 @@ const initEditor = () => {
   editor.on('change', () => {
     emit('update:modelValue', editor.getValue());
   });
+
+  // 【核心修复】：延迟 100 毫秒刷新编辑器。
+  // 这能确保 CSS 样式被 Vue 完全渲染后，CodeMirror 再重新测量光标坐标，彻底解决光标错位问题。
+  setTimeout(() => {
+    if (editor) {
+      editor.refresh();
+      editor.focus(); // 刷新后自动聚焦，方便直接打字
+    }
+  }, 100);
 };
 
 // 获取编辑器内容
@@ -102,20 +111,28 @@ onMounted(() => {
   height: 100%;
 }
 
-/* CodeMirror 的 gutter/行号默认留白偏大，这里收紧并统一字体，避免“行号与内容差两格” */
+/* 1. 基础配置 */
 :deep(.CodeMirror) {
   height: 100%;
   font-family: Consolas, "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.6;
 }
 
+/* 2. 行号区 (左侧“锁死”的区域) */
 :deep(.CodeMirror-gutters) {
-  padding-right: 0;
+  background-color: #272822 !important; /* 统一为 monokai 的背景色 */
+  border-right: 1px solid #555 !important; /* 核心：加一条分割线，视觉上把行号隔开 */
+  padding-right: 5px; /* 行号数字距离分割线的留白 */
 }
 
+/* 3. 文本输入区 (右侧代码区) */
+:deep(.CodeMirror-lines) {
+  padding-left: 10px; /* 核心：让代码文本和光标强行距离左侧的分割线 10px 的距离 */
+}
+
+/* 4. 让行号的颜色稍微暗一点，更像 IDE */
 :deep(.CodeMirror-linenumber) {
-  padding: 0 6px 0 0;
-  min-width: 2.5em;
+  color: #75715e !important;
 }
 </style>

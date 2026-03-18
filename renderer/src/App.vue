@@ -58,7 +58,7 @@
           <el-tag v-if="activeConnection" type="info">{{ activeConnection.name }}</el-tag>
           <span v-if="activeTable" class="crumb">{{ activeSchema }} / {{ activeTable }}</span>
         </div>
-        </el-header>
+      </el-header>
 
       <el-main class="main">
         <div v-if="openTabs.length === 0" class="empty-workspace">
@@ -83,7 +83,6 @@
             <div v-if="tab.type === 'table'" class="table-data-wrap">
               <div class="table-data-toolbar">
                 <el-button type="primary" size="small" @click="loadTableData(tab)" :loading="tab.loading">刷新数据</el-button>
-                
                 <el-pagination
                   v-model:current-page="tab.currentPage"
                   v-model:page-size="tab.pageSize"
@@ -106,25 +105,52 @@
               </div>
             </div>
 
-            <div v-else-if="tab.type === 'query'" class="runner">
-              <div class="runner-left">
-                <div class="editor-wrap">
-                  <sql-editor v-model="tab.sql" :connection="getConnectionById(tab.connectionId)" :key="tab.id"></sql-editor>
-                </div>
-                <div class="runner-actions">
-                  <el-button type="primary" @click="executeSqlForTab(tab)">执行SQL</el-button>
-                  <el-button @click="tab.sql = ''" style="margin-left: 8px;">清空</el-button>
-                </div>
+            <div v-else-if="tab.type === 'query'" class="query-wrap">
+              
+              <div class="query-toolbar">
+                <el-select 
+                  v-model="tab.connectionId" 
+                  placeholder="选择连接" 
+                  size="small" 
+                  style="width: 180px;"
+                  @change="onQueryConnectionChange(tab)"
+                >
+                  <el-option v-for="conn in allConnections" :key="conn.id" :label="conn.name" :value="conn.id" />
+                </el-select>
+                
+                <el-select 
+                  v-model="tab.schema" 
+                  placeholder="选择数据库" 
+                  size="small" 
+                  style="width: 180px;"
+                >
+                  <el-option v-for="schema in tab.schemaList" :key="schema" :label="schema" :value="schema" />
+                </el-select>
+                
+                <el-button type="primary" size="small" @click="executeSqlForTab(tab)" :loading="tab.loading">
+                  ▶ 执行 SQL
+                </el-button>
+                <el-button size="small" @click="tab.sql = ''">清空</el-button>
               </div>
-              <div class="runner-right">
+
+              <div class="query-editor-container">
+                <sql-editor v-model="tab.sql" :connection="getConnectionById(tab.connectionId)" :key="tab.id"></sql-editor>
+              </div>
+
+              <div class="query-result-container">
+                <div v-if="tab.error" class="error-panel">
+                  <div class="error-title">❌ 语法或执行错误:</div>
+                  {{ tab.error }}
+                </div>
                 <data-viewer
+                  v-else
                   :data="tab.result.rows"
                   :columns="tab.result.fields"
                   :loading="tab.loading"
-                  :error="tab.error"
                 ></data-viewer>
               </div>
             </div>
+
           </el-tab-pane>
         </el-tabs>
       </el-main>
@@ -243,7 +269,6 @@ const loadTableData = async (tab) => {
     let sql = '';
     const offset = (tab.currentPage - 1) * tab.pageSize;
     
-    // 1. 查询总条数 (用于分页器总数)
     let countSql = conn.dbType === 'mysql'
       ? `SELECT COUNT(*) as total FROM \`${tab.schema}\`.\`${tab.table}\``
       : `SELECT COUNT(*) as total FROM "${tab.schema}"."${tab.table}"`;
@@ -258,7 +283,6 @@ const loadTableData = async (tab) => {
       tab.total = Number(row.total || row.TOTAL || Object.values(row)[0] || 0);
     }
 
-    // 2. 查询当前页的数据 (加入 LIMIT 和 OFFSET)
     if (conn.dbType === 'mysql') {
       sql = `SELECT * FROM \`${tab.schema}\`.\`${tab.table}\` LIMIT ${tab.pageSize} OFFSET ${offset}`;
     } else {
@@ -318,8 +342,6 @@ const handleNodeClick = (data, node) => {
       
       openTabs.value.push(newTab);
       activeTab.value = tabId;
-      
-      // 刚打开标签页时，自动触发一次数据查询
       loadTableData(newTab);
     }
   }
@@ -333,28 +355,58 @@ const handleTabChange = (tabId) => {
       activeSchema.value = tab.schema;
       activeTable.value = tab.table;
     } else {
-      activeSchema.value = '';
+      // 当切换回查询 tab 时，面包屑显示该 tab 当前选择的库
+      activeSchema.value = tab.schema || '';
       activeTable.value = '';
     }
   }
 };
 
+// ================= 查询相关的新增逻辑 =================
 const nextQueryIndex = ref(1);
+
+// 当用户在查询界面切换下拉框的数据库连接时，拉取对应的库列表
+const onQueryConnectionChange = async (tab) => {
+  tab.schema = ''; // 清空已选库
+  tab.schemaList = []; // 清空库列表
+  
+  if (!tab.connectionId) return;
+  
+  try {
+    const res = await window.electronAPI.listSchemas({ connectionId: tab.connectionId });
+    if (res.success) {
+      tab.schemaList = res.data;
+    }
+  } catch (e) {
+    console.error("加载库列表失败", e);
+  }
+};
 
 const addQueryTab = () => {
   if (!activeConnection.value) return;
   const id = `query-${Date.now()}`;
-  openTabs.value.push({
+  
+  const newTab = {
     id,
     type: 'query', 
     title: `🔍 查询${nextQueryIndex.value++}`,
     connectionId: activeConnection.value.id,
+    schema: activeSchema.value || '', // 继承当前左侧选中的库
+    schemaList: [], // 存放该连接下的所有库，供下拉框选择
     sql: '',
     loading: false,
     error: '',
     result: { rows: [], fields: [] }
-  });
+  };
+  
+  openTabs.value.push(newTab);
   activeTab.value = id;
+  
+  // 刚创建时，自动拉取当前连接的库列表填充下拉框
+  onQueryConnectionChange(newTab).then(() => {
+    // 拉取完成后，恢复默认选中的库
+    newTab.schema = activeSchema.value || '';
+  });
 };
 
 const removeTab = (targetId) => {
@@ -379,14 +431,21 @@ const removeTab = (targetId) => {
 const executeSqlForTab = async (tab) => {
   const sql = (tab.sql || '').trim();
   if (!sql) return ElMessage.warning('请输入SQL语句');
+  if (!tab.connectionId) return ElMessage.warning('请选择数据库连接');
   
   try {
     tab.loading = true;
     tab.error = '';
+    
+    // 【重要】如果你希望针对用户下拉框选择的库 (tab.schema) 执行 SQL
+    // 根据具体数据库驱动配置，可能需要在后台执行 `USE ${tab.schema}`。
+    // 这里我们直接将前端组装好的数据发送给 IPC，如果你的 db-config.js 支持传入 schema 执行，可在此扩充。
     const result = await window.electronAPI.executeSql({
       connectionId: tab.connectionId, 
+      schema: tab.schema, // 传给后台当前下拉框选择的数据库名
       sql
     });
+    
     if (!result.success) {
       tab.error = result.error;
       return;
@@ -473,16 +532,15 @@ const testConnection = async (config) => {
   flex-direction: column;
 }
 
-/* 【修改点 3】调整 sidebar-header 样式，让按钮使用 flex 并排显示 */
 .sidebar-header {
   padding: 10px;
   border-bottom: 1px solid var(--el-border-color);
   display: flex;
-  gap: 10px; /* 两个按钮之间的间距 */
+  gap: 10px;
 }
 .header-btn {
-  flex: 1; /* 平分宽度 */
-  margin-left: 0 !important; /* 覆盖 el-button 的默认左边距 */
+  flex: 1;
+  margin-left: 0 !important;
 }
 
 .connection-tree {
@@ -500,7 +558,6 @@ const testConnection = async (config) => {
 .crumb { margin-left: 10px; color: var(--el-text-color-secondary); }
 .main { padding: 10px; height: calc(100vh - 60px); }
 
-/* 空白工作区样式 */
 .empty-workspace {
   height: 100%;
   display: flex;
@@ -528,16 +585,56 @@ const testConnection = async (config) => {
   min-height: 0;
 }
 
-.runner {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  height: calc(100vh - 130px);
+/* ================== 查询页面的新样式 (上下布局) ================== */
+.query-wrap {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 130px); /* 占满整个选项卡区域 */
 }
-.runner-left, .runner-right { min-height: 0; }
-.runner-left { display: flex; flex-direction: column; }
-.editor-wrap { flex: 1; min-height: 0; }
-.runner-actions { margin-top: 10px; }
+
+.query-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding-bottom: 10px;
+}
+
+.query-editor-container {
+  flex: 1; /* 占据上半部分剩余的全部空间 */
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  min-height: 150px; /* 防止被挤没 */
+  overflow: hidden;
+}
+
+.query-result-container {
+  height: 280px; /* 下半部分结果集固定高度，类似 Navicat 逻辑 */
+  margin-top: 10px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--el-bg-color);
+}
+
+.error-panel {
+  padding: 15px;
+  color: #f56c6c;
+  background-color: #fef0f0;
+  height: 100%;
+  overflow-y: auto;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.error-title {
+  font-weight: bold;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+/* ========================================================= */
 
 .custom-tree-node {
   flex: 1;

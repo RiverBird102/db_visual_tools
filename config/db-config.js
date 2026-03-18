@@ -100,7 +100,7 @@ async function testConnection(config) {
     try {
       connection = await mysql.createConnection({
         host,
-        port: port ? parseInt(port) : undefined, // 不填端口时走驱动默认
+        port: port ? parseInt(port) : undefined,
         user: username,
         password,
         database
@@ -138,13 +138,21 @@ async function testConnection(config) {
 }
 
 async function listSchemas(config) {
-  // 达梦这边很多环境对 SYS.SYSUSERS 等系统表权限受限，直接用当前用户名作为唯一 schema，避免 ODBC 报错
-  if (config.dbType === 'dm') {
-    const name = String(config.username || 'SYSDBA').toUpperCase();
-    return [name];
-  }
-
   return withConnection(config, async ({ dbType, conn }) => {
+    // 【核心修复】：达梦数据库真正查询系统中所有的模式(用户)
+    if (dbType === 'dm') {
+      try {
+        const rows = await conn.query('SELECT USERNAME AS name FROM ALL_USERS ORDER BY USERNAME');
+        if (rows && rows.length > 0) {
+          return rows.map(r => pickFirst(r, ['name', 'NAME', 'USERNAME'])).filter(Boolean).map(String);
+        }
+      } catch (error) {
+        console.warn("达梦获取模式失败，可能权限受限，降级为当前用户:", error);
+      }
+      // 如果报错，降级只显示自己
+      return [String(config.username || 'SYSDBA').toUpperCase()];
+    }
+
     if (dbType === 'mysql') {
       const [rows] = await conn.query('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME');
       return rows.map(r => r.name);
@@ -177,9 +185,14 @@ async function listTables(config, { schema } = {}) {
       );
       return result.rows.map(r => r.name);
     }
+    
+    // 【核心修复】：达梦跨模式查表
     if (dbType === 'dm') {
-      // DM：默认取当前用户下表
-      const rows = await conn.query('SELECT TABLE_NAME AS name FROM USER_TABLES ORDER BY TABLE_NAME');
+      const owner = String(schema || config.username || 'SYSDBA').toUpperCase();
+      const rows = await conn.query(
+        'SELECT TABLE_NAME AS name FROM ALL_TABLES WHERE OWNER = ? ORDER BY TABLE_NAME',
+        [owner]
+      );
       return (rows || [])
         .map(r => pickFirst(r, ['name', 'NAME', 'TABLE_NAME']))
         .filter(Boolean)
@@ -252,14 +265,17 @@ async function getTableColumns(config, { schema, table } = {}) {
       }));
     }
 
+    // 【核心修复】：达梦跨模式查字段与主键信息
     if (dbType === 'dm') {
-      // DM：列信息 + 主键
+      const owner = String(schema || config.username || 'SYSDBA').toUpperCase();
+      const tableName = String(table).toUpperCase();
+
       const pkRows = await conn.query(
         `SELECT col.COLUMN_NAME AS name
-         FROM USER_CONSTRAINTS con
-         JOIN USER_CONS_COLUMNS col ON con.CONSTRAINT_NAME = col.CONSTRAINT_NAME
-         WHERE con.CONSTRAINT_TYPE = 'P' AND con.TABLE_NAME = ?`,
-        [String(table).toUpperCase()]
+         FROM ALL_CONSTRAINTS con
+         JOIN ALL_CONS_COLUMNS col ON con.CONSTRAINT_NAME = col.CONSTRAINT_NAME AND con.OWNER = col.OWNER
+         WHERE con.CONSTRAINT_TYPE = 'P' AND con.TABLE_NAME = ? AND con.OWNER = ?`,
+        [tableName, owner]
       );
       const pkSet = new Set(
         (pkRows || [])
@@ -267,6 +283,7 @@ async function getTableColumns(config, { schema, table } = {}) {
           .filter(Boolean)
           .map(v => String(v).toUpperCase())
       );
+      
       const rows = await conn.query(
         `SELECT
             COLUMN_NAME AS name,
@@ -276,10 +293,10 @@ async function getTableColumns(config, { schema, table } = {}) {
             DATA_SCALE AS dataScale,
             NULLABLE AS nullable,
             DATA_DEFAULT AS defaultValue
-          FROM USER_TAB_COLUMNS
-          WHERE TABLE_NAME = ?
+          FROM ALL_TAB_COLUMNS
+          WHERE TABLE_NAME = ? AND OWNER = ?
           ORDER BY COLUMN_ID`,
-        [String(table).toUpperCase()]
+        [tableName, owner]
       );
       return (rows || []).map(r => {
         const colName = pickFirst(r, ['name', 'NAME', 'COLUMN_NAME']);
@@ -298,7 +315,7 @@ async function getTableColumns(config, { schema, table } = {}) {
           notNull: String(nullable).toUpperCase() === 'N',
           defaultValue,
           primaryKey: pkSet.has(String(colName).toUpperCase()),
-        autoIncrement: false // DM 自增需 identity/sequence，后续再精确识别
+          autoIncrement: false
         };
       });
     }
@@ -308,22 +325,22 @@ async function getTableColumns(config, { schema, table } = {}) {
 }
 
 /**
- * 执行达梦SQL（ODBC方式）
+ * 执行SQL（ODBC、MySQL、PG通用，并支持动态切换Schema）
  */
-async function executeSql(connectionConfig, sql) {
+async function executeSql(connectionConfig, sql, targetSchema) {
   const { dbType, host, port, username, password, database } = connectionConfig;
   
+  const activeDatabase = targetSchema || database;
+  
   if (dbType === 'dm') {
-    const connectionString = `DRIVER={DM8 ODBC DRIVER};SERVER=${host || '127.0.0.1'};PORT=${port || 5236};DATABASE=${database || 'DMHR'};UID=${username || 'SYSDBA'};PWD=${password || 'SYSDBA'};`;
+    const connectionString = `DRIVER={DM8 ODBC DRIVER};SERVER=${host || '127.0.0.1'};PORT=${port || 5236};DATABASE=${activeDatabase || 'DMHR'};UID=${username || 'SYSDBA'};PWD=${password || 'SYSDBA'};`;
     
     const connection = await odbc.connect(connectionString);
     try {
-      // 兼容部分 ODBC 驱动：末尾分号可能导致执行失败
       let cleanSql = typeof sql === 'string' ? sql.trim() : '';
       if (cleanSql.endsWith(';')) cleanSql = cleanSql.slice(0, -1).trim();
 
       const result = await connection.query(cleanSql);
-      // 适配返回格式
       return {
         rows: Array.isArray(result) ? result : [],
         fields: Array.isArray(result) && result.length > 0 ? Object.keys(result[0]) : []
@@ -345,7 +362,6 @@ async function executeSql(connectionConfig, sql) {
       await connection.close();
     }
   }
-  // MySQL执行
   else if (dbType === 'mysql') {
     const mysql = require('mysql2/promise');
     const connection = await mysql.createConnection({
@@ -353,13 +369,13 @@ async function executeSql(connectionConfig, sql) {
       port: port ? parseInt(port) : undefined,
       user: username,
       password,
-      database
+      database: activeDatabase
     });
     try {
-      const [result] = await connection.execute(sql);
+      const [result, fields] = await connection.query(sql);
       return {
-        rows: result,
-        fields: result.length > 0 ? Object.keys(result[0]) : []
+        rows: Array.isArray(result) ? result : [result], 
+        fields: fields ? fields.map(f => f.name) : []
       };
     } catch (error) {
       throw new Error(`SQL执行失败: ${error.message}`);
@@ -367,7 +383,6 @@ async function executeSql(connectionConfig, sql) {
       await connection.end();
     }
   }
-  // PostgreSQL / 人大金仓 / 华为高斯执行 SQL
   else if (dbType === 'postgresql' || dbType === 'kingbase' || dbType === 'gauss') {
     const { Client } = require('pg');
     const client = new Client({
@@ -375,7 +390,7 @@ async function executeSql(connectionConfig, sql) {
       port: port ? parseInt(port) : undefined,
       user: username,
       password,
-      database
+      database: activeDatabase 
     });
     try {
       await client.connect();

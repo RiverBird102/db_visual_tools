@@ -144,7 +144,8 @@ ipcMain.handle('db:delete-connection', async (event, id) => {
   }
 });
 
-ipcMain.handle('db:execute-sql', async (event, { connectionId, sql }) => {
+// 【核心修改】：接收前端传过来的 schema
+ipcMain.handle('db:execute-sql', async (event, { connectionId, schema, sql }) => {
   try {
     if (!connectionId) throw new Error('connectionId不能为空');
     if (typeof sql !== 'string' || !sql.trim()) throw new Error('SQL不能为空');
@@ -153,7 +154,8 @@ ipcMain.handle('db:execute-sql', async (event, { connectionId, sql }) => {
     if (!connection) {
       throw new Error('连接不存在');
     }
-    const result = await dbConnections.executeSql(connection, sql);
+    // 把 schema 传给底层的执行函数
+    const result = await dbConnections.executeSql(connection, sql, schema);
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: error.message };
