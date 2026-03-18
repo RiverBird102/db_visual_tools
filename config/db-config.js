@@ -72,20 +72,15 @@ async function withConnection(config, fn) {
   throw new Error(`暂不支持的数据库类型: ${dbType}`);
 }
 
-/**
- * 适配达梦ODBC连接（无需专属Node.js驱动）
- */
 async function testConnection(config) {
   const { dbType, host, port, username, password, database } = config;
   
-  // 达梦ODBC连接字符串（核心）
   if (dbType === 'dm') {
     const connectionString = `DRIVER={DM8 ODBC DRIVER};SERVER=${host || '127.0.0.1'};PORT=${port || 5236};DATABASE=${database || 'DMHR'};UID=${username || 'SYSDBA'};PWD=${password || 'SYSDBA'};`;
-    
     let connection;
     try {
       connection = await odbc.connect(connectionString);
-      await connection.query('SELECT 1 FROM DUAL'); // 测试达梦查询
+      await connection.query('SELECT 1 FROM DUAL');
       return { message: '本地达梦数据库连接成功（ODBC）' };
     } catch (error) {
       throw new Error(`达梦连接失败: ${error.message}`);
@@ -93,7 +88,6 @@ async function testConnection(config) {
       if (connection) await connection.close();
     }
   }
-  // MySQL 连接
   else if (dbType === 'mysql') {
     const mysql = require('mysql2/promise');
     let connection;
@@ -113,7 +107,6 @@ async function testConnection(config) {
       if (connection) await connection.end();
     }
   }
-  // PostgreSQL / 人大金仓 / 华为高斯（均走 PG 协议）
   else if (dbType === 'postgresql' || dbType === 'kingbase' || dbType === 'gauss') {
     const { Client } = require('pg');
     const client = new Client({
@@ -139,17 +132,15 @@ async function testConnection(config) {
 
 async function listSchemas(config) {
   return withConnection(config, async ({ dbType, conn }) => {
-    // 【核心修复】：达梦数据库真正查询系统中所有的模式(用户)
     if (dbType === 'dm') {
       try {
-        const rows = await conn.query('SELECT USERNAME AS name FROM ALL_USERS ORDER BY USERNAME');
+        const rows = await conn.query("SELECT USERNAME AS name FROM ALL_USERS WHERE USERNAME NOT IN ('SYS', 'SYSSSO', 'SYSAUDITOR', 'SYSINFO', 'CTXSYS') ORDER BY USERNAME");
         if (rows && rows.length > 0) {
           return rows.map(r => pickFirst(r, ['name', 'NAME', 'USERNAME'])).filter(Boolean).map(String);
         }
       } catch (error) {
         console.warn("达梦获取模式失败，可能权限受限，降级为当前用户:", error);
       }
-      // 如果报错，降级只显示自己
       return [String(config.username || 'SYSDBA').toUpperCase()];
     }
 
@@ -186,7 +177,6 @@ async function listTables(config, { schema } = {}) {
       return result.rows.map(r => r.name);
     }
     
-    // 【核心修复】：达梦跨模式查表
     if (dbType === 'dm') {
       const owner = String(schema || config.username || 'SYSDBA').toUpperCase();
       const rows = await conn.query(
@@ -265,7 +255,6 @@ async function getTableColumns(config, { schema, table } = {}) {
       }));
     }
 
-    // 【核心修复】：达梦跨模式查字段与主键信息
     if (dbType === 'dm') {
       const owner = String(schema || config.username || 'SYSDBA').toUpperCase();
       const tableName = String(table).toUpperCase();
@@ -325,38 +314,41 @@ async function getTableColumns(config, { schema, table } = {}) {
 }
 
 /**
- * 执行SQL（ODBC、MySQL、PG通用，并支持动态切换Schema）
+ * 执行SQL（支持判断 DML/DDL 并返回具体提示）
  */
 async function executeSql(connectionConfig, sql, targetSchema) {
   const { dbType, host, port, username, password, database } = connectionConfig;
-  
   const activeDatabase = targetSchema || database;
   
   if (dbType === 'dm') {
-    const connectionString = `DRIVER={DM8 ODBC DRIVER};SERVER=${host || '127.0.0.1'};PORT=${port || 5236};DATABASE=${activeDatabase || 'DMHR'};UID=${username || 'SYSDBA'};PWD=${password || 'SYSDBA'};`;
-    
+    const connectionString = `DRIVER={DM8 ODBC DRIVER};SERVER=${host || '127.0.0.1'};PORT=${port || 5236};DATABASE=${database || 'DMHR'};UID=${username || 'SYSDBA'};PWD=${password || 'SYSDBA'};`;
     const connection = await odbc.connect(connectionString);
     try {
+      if (targetSchema) await connection.query(`SET SCHEMA "${targetSchema}"`);
+
       let cleanSql = typeof sql === 'string' ? sql.trim() : '';
       if (cleanSql.endsWith(';')) cleanSql = cleanSql.slice(0, -1).trim();
 
       const result = await connection.query(cleanSql);
-      return {
-        rows: Array.isArray(result) ? result : [],
-        fields: Array.isArray(result) && result.length > 0 ? Object.keys(result[0]) : []
-      };
+      
+      // 【核心修改】：通过正则判断是否是查询语句
+      const isQuery = /^\s*(SELECT|WITH|SHOW|DESCRIBE|DESC)\b/i.test(cleanSql);
+      
+      if (isQuery) {
+        return {
+          isQuery: true,
+          rows: Array.isArray(result) ? result : [],
+          fields: (result.columns || []).map(c => c.name) || (result.length > 0 ? Object.keys(result[0]) : [])
+        };
+      } else {
+        return {
+          isQuery: false,
+          affectedRows: result.count !== undefined ? result.count : 0,
+          message: '执行成功 (OK)'
+        };
+      }
     } catch (error) {
-      const details =
-        error && Array.isArray(error.odbcErrors)
-          ? error.odbcErrors
-              .map(e => {
-                const state = e.sqlstate ? ` sqlstate=${e.sqlstate}` : '';
-                const code = e.code ? ` code=${e.code}` : '';
-                const msg = e.message ? ` message=${e.message}` : '';
-                return `[odbc]${state}${code}${msg}`.trim();
-              })
-              .join(' | ')
-          : '';
+      const details = error && Array.isArray(error.odbcErrors) ? error.odbcErrors.map(e => `[odbc] message=${e.message}`).join(' | ') : '';
       throw new Error(`SQL执行失败: ${error.message}${details ? ` (${details})` : ''}`);
     } finally {
       await connection.close();
@@ -365,18 +357,25 @@ async function executeSql(connectionConfig, sql, targetSchema) {
   else if (dbType === 'mysql') {
     const mysql = require('mysql2/promise');
     const connection = await mysql.createConnection({
-      host,
-      port: port ? parseInt(port) : undefined,
-      user: username,
-      password,
-      database: activeDatabase
+      host, port: port ? parseInt(port) : undefined, user: username, password, database: activeDatabase
     });
     try {
       const [result, fields] = await connection.query(sql);
-      return {
-        rows: Array.isArray(result) ? result : [result], 
-        fields: fields ? fields.map(f => f.name) : []
-      };
+      
+      // 【核心修改】：MySQL 返回 fields 代表是查询，否则是更新/删除/建表等
+      if (fields) {
+        return {
+          isQuery: true,
+          rows: result, 
+          fields: fields.map(f => f.name)
+        };
+      } else {
+        return {
+          isQuery: false,
+          affectedRows: result.affectedRows,
+          message: result.warningStatus ? '执行成功，但带有警告' : '执行成功 (OK)'
+        };
+      }
     } catch (error) {
       throw new Error(`SQL执行失败: ${error.message}`);
     } finally {
@@ -386,19 +385,27 @@ async function executeSql(connectionConfig, sql, targetSchema) {
   else if (dbType === 'postgresql' || dbType === 'kingbase' || dbType === 'gauss') {
     const { Client } = require('pg');
     const client = new Client({
-      host,
-      port: port ? parseInt(port) : undefined,
-      user: username,
-      password,
-      database: activeDatabase 
+      host, port: port ? parseInt(port) : undefined, user: username, password, database
     });
     try {
       await client.connect();
+      if (targetSchema) await client.query(`SET search_path TO "${targetSchema}"`);
       const result = await client.query(sql);
-      return {
-        rows: result.rows || [],
-        fields: (result.fields || []).map(f => f.name)
-      };
+      
+      // 【核心修改】：PG 系的区分
+      if (result.command === 'SELECT' || result.fields) {
+        return {
+          isQuery: true,
+          rows: result.rows || [],
+          fields: (result.fields || []).map(f => f.name)
+        };
+      } else {
+        return {
+          isQuery: false,
+          affectedRows: result.rowCount,
+          message: `${result.command} 执行成功`
+        };
+      }
     } catch (error) {
       throw new Error(`SQL执行失败: ${error.message}`);
     } finally {

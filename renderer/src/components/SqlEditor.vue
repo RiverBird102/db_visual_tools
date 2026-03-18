@@ -9,6 +9,11 @@ import 'codemirror/lib/codemirror.css';
 import 'codemirror/theme/monokai.css';
 import 'codemirror/mode/sql/sql';
 
+// 【新增】引入智能代码提示的核心 CSS 和 JS
+import 'codemirror/addon/hint/show-hint.css';
+import 'codemirror/addon/hint/show-hint.js';
+import 'codemirror/addon/hint/sql-hint.js';
+
 const props = defineProps({
   modelValue: {
     type: String,
@@ -17,6 +22,11 @@ const props = defineProps({
   connection: {
     type: Object,
     default: null
+  },
+  // 【新增】接收外部传入的数据库表结构，用于代码联想
+  hintTables: {
+    type: Object,
+    default: () => ({})
   }
 });
 
@@ -37,29 +47,45 @@ const initEditor = () => {
     indentWithTabs: true,
     smartIndent: true,
     matchBrackets: true,
-    autoCloseBrackets: true
+    autoCloseBrackets: true,
+    // 【新增】绑定代码提示的快捷键并配置词典
+    extraKeys: { "Ctrl-Space": "autocomplete" },
+    hintOptions: {
+      tables: props.hintTables || {} // 注入表名和字段信息
+    }
   });
   
-  // 设置编辑器高度
   editor.setSize('100%', '100%');
 
   editor.on('change', () => {
     emit('update:modelValue', editor.getValue());
   });
 
-  // 【核心修复】：延迟 100 毫秒刷新编辑器。
-  // 这能确保 CSS 样式被 Vue 完全渲染后，CodeMirror 再重新测量光标坐标，彻底解决光标错位问题。
+  // 【新增】监听用户输入，输入字母时自动弹出智能提示
+  editor.on('inputRead', (cm, event) => {
+    if (!cm.state.completionActive && /^[a-zA-Z0-9_.]+$/.test(event.text[0])) {
+      CodeMirror.commands.autocomplete(cm, null, { completeSingle: false });
+    }
+  });
+
   setTimeout(() => {
     if (editor) {
       editor.refresh();
-      editor.focus(); // 刷新后自动聚焦，方便直接打字
+      editor.focus();
     }
   }, 100);
 };
 
-// 获取编辑器内容
+// 获取编辑器全部内容
 const getSql = () => {
   return editor ? editor.getValue() : '';
+};
+
+// 【新增】获取用户用鼠标选中的代码，如果没选中，则返回全部代码
+const getSelectionOrAll = () => {
+  if (!editor) return '';
+  const selection = editor.getSelection();
+  return selection ? selection : editor.getValue();
 };
 
 const setSql = (sql) => {
@@ -75,11 +101,12 @@ const clear = () => {
   }
 };
 
-// 暴露方法
+// 暴露方法给父组件 App.vue 使用
 defineExpose({
   getSql,
   setSql,
-  clear
+  clear,
+  getSelectionOrAll
 });
 
 // 监听连接变化
@@ -90,6 +117,13 @@ watch(() => props.connection, (newVal) => {
     }
   }
 });
+
+// 监听外部传入的表元数据变化，实时更新词典
+watch(() => props.hintTables, (newVal) => {
+  if (editor) {
+    editor.setOption('hintOptions', { tables: newVal || {} });
+  }
+}, { deep: true });
 
 watch(
   () => props.modelValue,
@@ -106,12 +140,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.sql-editor {
-  width: 100%;
-  height: 100%;
-}
+.sql-editor { width: 100%; height: 100%; }
 
-/* 1. 基础配置 */
 :deep(.CodeMirror) {
   height: 100%;
   font-family: Consolas, "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
@@ -119,20 +149,24 @@ onMounted(() => {
   line-height: 1.6;
 }
 
-/* 2. 行号区 (左侧“锁死”的区域) */
 :deep(.CodeMirror-gutters) {
-  background-color: #272822 !important; /* 统一为 monokai 的背景色 */
-  border-right: 1px solid #555 !important; /* 核心：加一条分割线，视觉上把行号隔开 */
-  padding-right: 5px; /* 行号数字距离分割线的留白 */
+  background-color: #272822 !important;
+  border-right: 1px solid #555 !important;
+  padding-right: 5px;
 }
 
-/* 3. 文本输入区 (右侧代码区) */
 :deep(.CodeMirror-lines) {
-  padding-left: 10px; /* 核心：让代码文本和光标强行距离左侧的分割线 10px 的距离 */
+  padding-left: 10px;
 }
 
-/* 4. 让行号的颜色稍微暗一点，更像 IDE */
 :deep(.CodeMirror-linenumber) {
   color: #75715e !important;
+}
+
+/* 【新增】代码提示框美化 */
+:deep(.CodeMirror-hints) {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+  z-index: 9999;
 }
 </style>
