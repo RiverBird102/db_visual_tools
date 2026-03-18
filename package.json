@@ -1,0 +1,53 @@
+{
+  "name": "db_visual_tools",
+  "version": "1.0.0",
+  "description": "基于Electron的国产数据库可视化管理工具",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "vite --config ./renderer/vite.config.js",
+    "build:renderer": "vite build --config ./renderer/vite.config.js",
+    "build": "npm run build:renderer && electron-builder",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "electron",
+    "达梦数据库",
+    "国产数据库"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "codemirror": "^5.65.16",
+    "electron-store": "^8.1.0",
+    "element-plus": "^2.5.3",
+    "mysql2": "^3.9.1",
+    "odbc": "^2.4.9",
+    "pg": "^8.11.3",
+    "uuid": "^9.0.1",
+    "vue": "^3.4.15"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.3",
+    "electron": "^41.0.2",
+    "electron-builder": "^24.9.1",
+    "vite": "^5.0.12"
+  },
+  "build": {
+    "appId": "com.dbtools.visual",
+    "productName": "国产数据库可视化管理工具",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "deb"
+    }
+  }
+}
