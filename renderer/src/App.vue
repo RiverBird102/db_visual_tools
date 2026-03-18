@@ -1,36 +1,37 @@
 <template>
   <el-container class="app-root">
-    <el-aside width="300px" class="left">
-      <div class="sidebar-header">
-        <el-button type="primary" @click="openCreateDialog">新建连接</el-button>
+    <el-aside width="320px" class="left">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <el-button type="primary" style="width: 100%;" @click="openCreateDialog">新建连接</el-button>
+        </div>
       </div>
-
+      
       <el-tree
-        :data="connectionTree"
+        :key="treeRenderKey"
         :props="treeProps"
-        node-key="id"
+        :load="loadTreeNode"
+        lazy
+        node-key="treeId"
         highlight-current
         @node-click="handleNodeClick"
         class="connection-tree"
       >
         <template #default="{ node, data }">
           <div class="custom-tree-node">
-            <span>{{ node.label }}</span>
-            <span class="node-actions" @click.stop>
+            <span class="node-label">
+              <span v-if="data.type === 'connection'">🔌</span>
+              <span v-else-if="data.type === 'schema'">🗃️</span>
+              <span v-else-if="data.type === 'table'">📄</span>
+              <span style="margin-left: 5px" :title="node.label">{{ node.label }}</span>
+            </span>
+            <span class="node-actions" @click.stop v-if="data.type === 'connection'">
               <el-button link type="primary" size="small" @click.stop="openEditDialog(data)">编辑</el-button>
               <el-button link type="danger" size="small" @click.stop="deleteConnection(data)">删除</el-button>
             </span>
           </div>
         </template>
       </el-tree>
-
-      <div class="schema-panel" v-if="activeConnection">
-        <schema-explorer
-          :connection-id="activeConnection.id"
-          @selectTable="handleSelectTable"
-          @schemaChanged="(s) => (activeSchema = s)"
-        />
-      </div>
 
       <el-dialog :title="isEditMode ? '编辑数据库连接' : '新建数据库连接'" v-model="showConnectDialog" width="600px">
         <db-connect 
@@ -41,6 +42,7 @@
         ></db-connect>
       </el-dialog>
     </el-aside>
+    
     <el-container class="right">
       <el-header class="topbar">
         <div class="topbar-left">
@@ -101,7 +103,7 @@
         </el-tabs>
       </el-main>
     </el-container>
-</el-container>
+  </el-container>
 </template>
 
 <script setup>
@@ -110,7 +112,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import DbConnect from './components/DbConnect.vue';
 import SqlEditor from './components/SqlEditor.vue';
 import DataViewer from './components/DataViewer.vue';
-import SchemaExplorer from './components/SchemaExplorer.vue';
+// import SchemaExplorer from './components/SchemaExplorer.vue'; // 已废弃，不再需要
 import TableDesigner from './components/TableDesigner.vue';
 
 // 响应式数据
@@ -121,30 +123,116 @@ const currentEditData = ref(null);
 const loading = ref(false);
 const errorMessage = ref('');
 const queryResult = ref({ rows: [], fields: [] });
-const connectionTree = ref([]);
+
 const activeSchema = ref('');
 const activeTable = ref('');
 const activeTab = ref('designer');
 const generatedSql = ref('');
 const queryTabs = ref([]);
+
+// 【新增】级联树的核心状态
+const treeRenderKey = ref(0); 
+const allConnections = ref([]); 
 const treeProps = reactive({
-  label: 'name',
-  children: 'tables'
+  label: 'label',
+  children: 'children',
+  isLeaf: 'isLeaf' // 告诉树哪些节点可以展开，哪些是叶子节点
 });
 
-// 获取所有数据库连接
+// 【修改】加载连接（现在只负责触发树的重新渲染）
 const loadConnections = async () => {
-  try {
-    const result = await window.electronAPI.getDbConnections();
-    if (result.success) {
-      // 构建连接树
-      connectionTree.value = result.data.map(conn => ({
+  treeRenderKey.value += 1; 
+};
+
+// 【核心新增】懒加载树节点的逻辑
+const loadTreeNode = async (node, resolve) => {
+  // 级别 0：加载所有的数据库连接
+  if (node.level === 0) {
+    const res = await window.electronAPI.getDbConnections();
+    if (res.success) {
+      allConnections.value = res.data;
+      const nodes = res.data.map(conn => ({
         ...conn,
-        tables: [] // 后续可加载表列表
+        label: conn.name,
+        type: 'connection',
+        treeId: `conn_${conn.id}`,
+        isLeaf: false // 连接下面还有库，不是叶子
       }));
+      return resolve(nodes);
     }
-  } catch (error) {
-    console.error('加载连接失败:', error);
+    return resolve([]);
+  }
+
+  // 级别 1：加载选中连接下的所有的 Schema (库)
+  if (node.level === 1) {
+    const conn = node.data;
+    try {
+      const res = await window.electronAPI.listSchemas({ connectionId: conn.id });
+      if (res.success) {
+        const nodes = res.data.map(schema => ({
+          label: schema,
+          type: 'schema',
+          connectionId: conn.id,
+          schemaName: schema,
+          treeId: `schema_${conn.id}_${schema}`,
+          isLeaf: false // 库下面还有表，不是叶子
+        }));
+        return resolve(nodes);
+      } else {
+        ElMessage.error(`获取数据库失败: ${res.error}`);
+        return resolve([]);
+      }
+    } catch (error) {
+      return resolve([]);
+    }
+  }
+
+  // 级别 2：加载选中 Schema 下的所有的 Table (表)
+  if (node.level === 2) {
+    const schemaData = node.data;
+    try {
+      const res = await window.electronAPI.listTables({
+        connectionId: schemaData.connectionId,
+        schema: schemaData.schemaName
+      });
+      if (res.success) {
+        const nodes = res.data.map(table => {
+          const tableName = typeof table === 'object' ? (table.tableName || table.name) : table;
+          return {
+            label: tableName,
+            type: 'table',
+            connectionId: schemaData.connectionId,
+            schemaName: schemaData.schemaName,
+            tableName: tableName,
+            treeId: `table_${schemaData.connectionId}_${schemaData.schemaName}_${tableName}`,
+            isLeaf: true // 表是最后一级，所以是叶子节点
+          };
+        });
+        return resolve(nodes);
+      } else {
+        ElMessage.error(`获取表失败: ${res.error}`);
+        return resolve([]);
+      }
+    } catch (error) {
+      return resolve([]);
+    }
+  }
+
+  return resolve([]);
+};
+
+// 【修改】处理树节点的点击事件（根据点击的层级做出不同反应）
+const handleNodeClick = (data, node) => {
+  if (data.type === 'connection') {
+    activeConnection.value = allConnections.value.find(c => c.id === data.id);
+  } else if (data.type === 'schema') {
+    activeConnection.value = allConnections.value.find(c => c.id === data.connectionId);
+    activeSchema.value = data.schemaName;
+  } else if (data.type === 'table') {
+    activeConnection.value = allConnections.value.find(c => c.id === data.connectionId);
+    activeSchema.value = data.schemaName;
+    activeTable.value = data.tableName;
+    activeTab.value = 'designer'; // 自动切换到表结构标签页
   }
 };
 
@@ -158,26 +246,31 @@ const openCreateDialog = () => {
 // 编辑连接弹窗
 const openEditDialog = (data) => {
   isEditMode.value = true;
-  currentEditData.value = { ...data }; // 深拷贝，防止直接修改原对象
+  currentEditData.value = { ...data };
   showConnectDialog.value = true;
 };
 
+// 保存连接
 const saveConnection = async (connection) => {
   try {
     if (isEditMode.value && currentEditData.value) {
-      // 编辑：保持原有连接的 ID 不变
       connection.id = currentEditData.value.id;
+      // 强行断开后端缓存，确保修改立即生效（沿用上一次的修复逻辑）
+      if (window.electronAPI.disconnectDb) {
+        await window.electronAPI.disconnectDb(connection.id);
+      }
+      
       const result = await window.electronAPI.updateDbConnection(JSON.parse(JSON.stringify(connection)));
       if (!result.success) {
         ElMessage.error(`保存失败: ${result.error}`);
         return;
       }
-      // 如果当前正在使用该连接，更新右侧展示用的数据
       if (activeConnection.value && activeConnection.value.id === connection.id) {
-        activeConnection.value = { ...activeConnection.value, ...connection };
+        activeConnection.value = null; // 清空右侧，强制重新点击
+        activeSchema.value = '';
+        activeTable.value = '';
       }
     } else {
-      // 新建：生成一个全新的 ID 然后保存
       connection.id = Date.now().toString();
       const result = await window.electronAPI.saveDbConnection(JSON.parse(JSON.stringify(connection)));
       if (!result.success) {
@@ -188,14 +281,13 @@ const saveConnection = async (connection) => {
 
     ElMessage.success(isEditMode.value ? '连接修改成功！' : '连接保存成功！');
     showConnectDialog.value = false;
-    // 重新加载左侧的导航树，刷新显示
-    await loadConnections();
+    await loadConnections(); // 重新加载树
   } catch (error) {
     ElMessage.error(`保存异常: ${error.message}`);
   }
 };
 
-// 新增删除连接方法
+// 删除连接
 const deleteConnection = async (data) => {
   try {
     await ElMessageBox.confirm(`确定要删除数据库连接 "${data.name}" 吗？`, '警告', {
@@ -207,7 +299,6 @@ const deleteConnection = async (data) => {
     const result = await window.electronAPI.deleteDbConnection(data.id);
     if (result.success) {
       ElMessage.success('删除成功！');
-      // 如果删除的是当前选中的连接，清空右侧工作区
       if (activeConnection.value && activeConnection.value.id === data.id) {
         activeConnection.value = null;
         activeSchema.value = '';
@@ -218,7 +309,7 @@ const deleteConnection = async (data) => {
       ElMessage.error(`删除失败: ${result.error}`);
     }
   } catch (e) {
-    // 用户点击了取消，不做处理
+    //取消删除
   }
 };
 
@@ -226,7 +317,6 @@ const deleteConnection = async (data) => {
 const testConnection = async (config) => {
   try {
     loading.value = true;
-    // 显式做一次深拷贝，确保传给 IPC 的对象是可结构化克隆的纯数据
     const plain = JSON.parse(JSON.stringify(config));
     const result = await window.electronAPI.testDbConnection(plain);
     if (result.success) {
@@ -241,23 +331,6 @@ const testConnection = async (config) => {
   }
 };
 
-// 点击连接节点
-const handleNodeClick = (data) => {
-  if (data.id) {
-    activeConnection.value = data;
-    activeSchema.value = '';
-    activeTable.value = '';
-    generatedSql.value = '';
-    errorMessage.value = '';
-    queryResult.value = { rows: [], fields: [] };
-  }
-};
-
-const handleSelectTable = ({ schema, table }) => {
-  activeSchema.value = schema || '';
-  activeTable.value = table || '';
-  activeTab.value = 'designer';
-};
 
 const nextQueryIndex = ref(1);
 
@@ -276,7 +349,7 @@ const addQueryTab = () => {
 
 const removeTab = (name) => {
   const idx = queryTabs.value.findIndex(t => t.id === name);
-  if (idx === -1) return; // 固定页签不处理
+  if (idx === -1) return;
   const wasActive = activeTab.value === name;
   queryTabs.value.splice(idx, 1);
   if (wasActive) {
@@ -284,8 +357,6 @@ const removeTab = (name) => {
     activeTab.value = next ? next.id : 'designer';
   }
 };
-
-
 
 const executeSqlForTab = async (tab) => {
   if (!activeConnection.value) {
@@ -342,9 +413,9 @@ const runGenerated = async () => {
   }
 };
 
-// 初始化
-onMounted(async () => {
-  await loadConnections();
+// 初始化：默认不执行什么，只要 treeRenderKey 是 0 就会自动触发 lazy load 第一层
+onMounted(() => {
+  // 不再需要手动 loadConnections()，因为 lazy=true 的 el-tree 挂载后会自动调用 loadTreeNode(level 0)
 });
 </script>
 
@@ -360,13 +431,10 @@ onMounted(async () => {
   border-bottom: 1px solid var(--el-border-color);
 }
 .connection-tree {
-  padding: 8px;
-  max-height: 260px;
-  overflow: auto;
-}
-.schema-panel {
+  /* 去除写死的高度，让它填满左边栏 */
   flex: 1;
-  min-height: 0;
+  padding: 8px;
+  overflow: auto;
 }
 .right { height: 100%; }
 .topbar {
@@ -405,10 +473,20 @@ onMounted(async () => {
   justify-content: space-between;
   font-size: 14px;
   padding-right: 8px;
+  /* 防止文字太长撑破布局 */
+  overflow: hidden; 
+}
+.node-label {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* 默认隐藏操作按钮 */
 .node-actions {
   display: none;
+  flex-shrink: 0;
 }
 /* 鼠标悬浮在树节点时，显示操作按钮 */
 :deep(.el-tree-node__content:hover) .node-actions {
