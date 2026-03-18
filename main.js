@@ -117,6 +117,20 @@ ipcMain.handle('db:update-connection', async (event, connection) => {
   }
 });
 
+// 【新增：清理底层数据库连接缓存】
+ipcMain.handle('db:disconnect', async (event, id) => {
+  try {
+    if (!id) throw new Error('ID不能为空');
+    // 如果你的 dbConnections (db-config.js) 内部有缓存逻辑，调用它清理
+    if (dbConnections.disconnect) {
+      await dbConnections.disconnect(id);
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // 删除连接
 ipcMain.handle('db:delete-connection', async (event, id) => {
   try {

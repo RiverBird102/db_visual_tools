@@ -37,7 +37,7 @@
           :initial-data="currentEditData" 
           @save="saveConnection" 
           @test="testConnection"
-          @revert-fallback="handleFallback" 
+          @cancel="showConnectDialog = false" 
         ></db-connect>
       </el-dialog>
     </el-aside>
@@ -162,35 +162,36 @@ const openEditDialog = (data) => {
   showConnectDialog.value = true;
 };
 
-// 改造原有的 saveConnection 方法
 const saveConnection = async (connection) => {
   try {
-    let result;
-    if (isEditMode.value) {
-      // 执行更新
-      result = await window.electronAPI.updateDbConnection(connection);
-    } else {
-      // 执行新增
-      result = await window.electronAPI.saveDbConnection({
-        id: Date.now().toString(),
-        ...connection
-      });
-    }
-
-    if (result.success) {
-      showConnectDialog.value = false;
-      ElMessage.success(isEditMode.value ? '连接更新成功！' : '连接保存成功！');
-      await loadConnections();
-      
-      // 如果编辑的是当前正在使用的连接，更新一下信息
+    if (isEditMode.value && currentEditData.value) {
+      // 编辑：保持原有连接的 ID 不变
+      connection.id = currentEditData.value.id;
+      const result = await window.electronAPI.updateDbConnection(JSON.parse(JSON.stringify(connection)));
+      if (!result.success) {
+        ElMessage.error(`保存失败: ${result.error}`);
+        return;
+      }
+      // 如果当前正在使用该连接，更新右侧展示用的数据
       if (activeConnection.value && activeConnection.value.id === connection.id) {
-        activeConnection.value = { ...connection };
+        activeConnection.value = { ...activeConnection.value, ...connection };
       }
     } else {
-      ElMessage.error(`保存失败: ${result.error}`);
+      // 新建：生成一个全新的 ID 然后保存
+      connection.id = Date.now().toString();
+      const result = await window.electronAPI.saveDbConnection(JSON.parse(JSON.stringify(connection)));
+      if (!result.success) {
+        ElMessage.error(`保存失败: ${result.error}`);
+        return;
+      }
     }
+
+    ElMessage.success(isEditMode.value ? '连接修改成功！' : '连接保存成功！');
+    showConnectDialog.value = false;
+    // 重新加载左侧的导航树，刷新显示
+    await loadConnections();
   } catch (error) {
-    console.error('保存连接失败:', error);
+    ElMessage.error(`保存异常: ${error.message}`);
   }
 };
 
@@ -225,7 +226,9 @@ const deleteConnection = async (data) => {
 const testConnection = async (config) => {
   try {
     loading.value = true;
-    const result = await window.electronAPI.testDbConnection(config);
+    // 显式做一次深拷贝，确保传给 IPC 的对象是可结构化克隆的纯数据
+    const plain = JSON.parse(JSON.stringify(config));
+    const result = await window.electronAPI.testDbConnection(plain);
     if (result.success) {
       ElMessage.success('连接测试成功！');
     } else {
@@ -282,22 +285,7 @@ const removeTab = (name) => {
   }
 };
 
-// ====== 在 App.vue 的 script 区域随便找个空白处添加 ======
 
-// 处理用户点击“取消并回退至默认MySQL”的逻辑
-const handleFallback = (fallbackData) => {
-  // 1. 强制退出编辑模式，把它当做一个“新建”流程
-  isEditMode.value = false; 
-  
-  // 2. 清除当前正在编辑的 ID，确保下次点保存是“新增”而不是“覆盖修改”
-  currentEditData.value = null; 
-  
-  // 提示用户
-  ElMessage.info('已回退到固化的默认MySQL连接信息');
-  
-  // 注意：我们这里没有写 showConnectDialog.value = false;
-  // 所以弹窗会继续保持开启状态！完全符合你的要求。
-};
 
 const executeSqlForTab = async (tab) => {
   if (!activeConnection.value) {
