@@ -148,9 +148,19 @@ async function listSchemas(config) {
       const [rows] = await conn.query('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME');
       return rows.map(r => r.name);
     }
+    
+    // 【核心修改】：过滤人大金仓等 PG 系数据库的内置系统 Schema
     if (isPgFamily(dbType)) {
       const result = await conn.query(
-        "SELECT nspname AS name FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema' ORDER BY nspname"
+        `SELECT nspname AS name 
+         FROM pg_namespace 
+         WHERE nspname NOT LIKE 'pg_%' 
+           AND nspname <> 'information_schema' 
+           AND nspname NOT LIKE 'sys%' 
+           AND nspname NOT LIKE 'dbms_%' 
+           AND nspname NOT LIKE 'kdb_%'
+           AND nspname NOT IN ('anon', 'perf', 'src_restrict', 'wmsys', 'xlog_record_read', 'sysaudit', 'sysmac', 'sys_catalog', 'sys_hm') 
+         ORDER BY nspname`
       );
       return result.rows.map(r => r.name);
     }
@@ -331,7 +341,6 @@ async function executeSql(connectionConfig, sql, targetSchema) {
 
       const result = await connection.query(cleanSql);
       
-      // 【核心修改】：通过正则判断是否是查询语句
       const isQuery = /^\s*(SELECT|WITH|SHOW|DESCRIBE|DESC)\b/i.test(cleanSql);
       
       if (isQuery) {
@@ -362,7 +371,6 @@ async function executeSql(connectionConfig, sql, targetSchema) {
     try {
       const [result, fields] = await connection.query(sql);
       
-      // 【核心修改】：MySQL 返回 fields 代表是查询，否则是更新/删除/建表等
       if (fields) {
         return {
           isQuery: true,
@@ -392,7 +400,6 @@ async function executeSql(connectionConfig, sql, targetSchema) {
       if (targetSchema) await client.query(`SET search_path TO "${targetSchema}"`);
       const result = await client.query(sql);
       
-      // 【核心修改】：PG 系的区分
       if (result.command === 'SELECT' || result.fields) {
         return {
           isQuery: true,

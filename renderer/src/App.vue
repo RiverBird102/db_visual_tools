@@ -113,7 +113,6 @@
             </div>
 
             <div v-else-if="tab.type === 'query'" class="query-wrap">
-              
               <div class="query-toolbar">
                 <el-select 
                   v-model="tab.connectionId" 
@@ -143,40 +142,64 @@
                 <el-button size="small" @click="tab.sql = ''">清空</el-button>
               </div>
 
-              <div class="query-editor-container">
-                <sql-editor 
-                  :ref="el => setEditorRef(el, tab.id)"
-                  v-model="tab.sql" 
-                  :connection="getConnectionById(tab.connectionId)" 
-                  :hintTables="tab.hintTables"
-                  :key="tab.id"
-                ></sql-editor>
-              </div>
-
-              <div class="query-result-container">
-                <div v-if="tab.error" class="error-panel">
-                  <div class="error-title">❌ 语法或执行错误:</div>
-                  {{ tab.error }}
+              <div class="split-pane" ref="splitPane">
+                <div class="query-editor-container" :style="{ height: tab.showBottomPanel ? tab.editorHeight + '%' : '100%' }">
+                  <sql-editor 
+                    :ref="el => setEditorRef(el, tab.id)"
+                    v-model="tab.sql" 
+                    :connection="getConnectionById(tab.connectionId)" 
+                    :hintTables="tab.hintTables"
+                    :key="tab.id"
+                  ></sql-editor>
                 </div>
-                
-                <div v-else-if="tab.result && tab.result.isQuery === false" class="success-panel">
-                  <div class="success-title">✅ SQL 执行成功</div>
-                  <div class="success-detail">👉 状态: {{ tab.result.message }}</div>
-                  <div class="success-detail" v-if="tab.result.affectedRows !== undefined">
-                    👉 影响的行数: {{ tab.result.affectedRows }}
+
+                <div class="resizer" v-if="tab.showBottomPanel" @mousedown="startDrag($event, tab)"></div>
+
+                <div class="query-bottom-panel" v-if="tab.showBottomPanel" :style="{ height: (100 - tab.editorHeight) + '%' }">
+                  <div class="bottom-panel-header">
+                    <div class="bottom-tabs">
+                      <span :class="{ active: tab.bottomTab === 'result' }" @click="tab.bottomTab = 'result'">结果集</span>
+                      <span :class="{ active: tab.bottomTab === 'message' }" @click="tab.bottomTab = 'message'">消息日志</span>
+                      <span :class="{ active: tab.bottomTab === 'history' }" @click="tab.bottomTab = 'history'">执行历史</span>
+                    </div>
+                    <div class="bottom-actions">
+                      <el-button link size="small" @click="tab.showBottomPanel = false">🔽 关闭面板</el-button>
+                    </div>
+                  </div>
+                  
+                  <div class="bottom-panel-content">
+                    <div v-show="tab.bottomTab === 'result'" class="tab-content-inner">
+                      <data-viewer v-if="tab.result && tab.result.isQuery" :data="tab.result.rows" :columns="tab.result.fields" :loading="tab.loading"></data-viewer>
+                      <el-empty v-else description="无结果集返回" :image-size="60"></el-empty>
+                    </div>
+
+                    <div v-show="tab.bottomTab === 'message'" class="tab-content-inner message-log">
+                      <div v-if="tab.error" class="error-text">❌ 错误: {{ tab.error }}</div>
+                      <div v-else-if="tab.result && tab.result.isQuery === false" class="success-text">
+                        ✅ {{ tab.result.message }} <span v-if="tab.result.affectedRows !== undefined"> (受影响的行数: {{ tab.result.affectedRows }})</span>
+                      </div>
+                      <div v-else-if="tab.result && tab.result.isQuery" class="success-text">✅ 查询执行成功，返回 {{ tab.result.rows.length }} 条记录。</div>
+                      <div v-else style="color: #999;">等待执行...</div>
+                    </div>
+
+                    <div v-show="tab.bottomTab === 'history'" class="tab-content-inner">
+                      <el-table :data="tab.history" size="small" border height="100%" style="width: 100%">
+                        <el-table-column prop="time" label="执行时间" width="160"></el-table-column>
+                        <el-table-column prop="sql" label="SQL语句" show-overflow-tooltip></el-table-column>
+                        <el-table-column prop="duration" label="耗时(ms)" width="90"></el-table-column>
+                        <el-table-column prop="status" label="状态" width="80">
+                          <template #default="{row}">
+                            <el-tag :type="row.status === '成功' ? 'success' : 'danger'" size="small">{{ row.status }}</el-tag>
+                          </template>
+                        </el-table-column>
+                      </el-table>
+                    </div>
                   </div>
                 </div>
+              </div>
 
-                <data-viewer
-                  v-else-if="tab.result && tab.result.isQuery === true"
-                  :data="tab.result.rows"
-                  :columns="tab.result.fields"
-                  :loading="tab.loading"
-                ></data-viewer>
-                
-                <div v-else class="empty-result">
-                  <el-empty description="请执行 SQL 语句以查看结果" :image-size="60"></el-empty>
-                </div>
+              <div v-if="!tab.showBottomPanel" class="restore-bar" @click="tab.showBottomPanel = true">
+                <span>⬆️ 展开结果面板</span>
               </div>
             </div>
 
@@ -262,7 +285,6 @@ const loadTreeNode = async (node, resolve) => {
   return resolve([]);
 };
 
-// 【核心修改】极致优化的表数据加载逻辑
 const loadTableData = async (tab) => {
   tab.loading = true;
   tab.error = '';
@@ -270,7 +292,6 @@ const loadTableData = async (tab) => {
     const conn = getConnectionById(tab.connectionId);
     const offset = (tab.currentPage - 1) * tab.pageSize;
 
-    // 第一步：只查这 50 条数据，保证 100 毫秒内出结果给用户看！
     let sql = conn.dbType === 'mysql'
       ? `SELECT * FROM \`${tab.schema}\`.\`${tab.table}\` LIMIT ${tab.pageSize} OFFSET ${offset}`
       : `SELECT * FROM "${tab.schema}"."${tab.table}" LIMIT ${tab.pageSize} OFFSET ${offset}`;
@@ -284,9 +305,8 @@ const loadTableData = async (tab) => {
     }
     
     tab.result = result.data || { rows: [], fields: [] };
-    tab.loading = false; // 立刻关闭转圈动画，用户已经可以看数据了
+    tab.loading = false; 
 
-    // 第二步：在后台悄悄查数据总数，就算查 10 秒也不会卡住用户的界面
     let countSql = conn.dbType === 'mysql'
       ? `SELECT COUNT(*) as total FROM \`${tab.schema}\`.\`${tab.table}\``
       : `SELECT COUNT(*) as total FROM "${tab.schema}"."${tab.table}"`;
@@ -304,7 +324,6 @@ const loadTableData = async (tab) => {
   }
 };
 
-// 【核心修改】点击节点：先弹标签，再查数据
 const handleNodeClick = (data) => {
   if (data.connectionId || data.id) activeConnection.value = getConnectionById(data.connectionId || data.id);
   if (data.type === 'schema') { activeSchema.value = data.schemaName; activeTable.value = ''; } 
@@ -315,7 +334,6 @@ const handleNodeClick = (data) => {
       activeTab.value = tabId; 
     } 
     else {
-      // 1. 瞬间先推入一个带有 loading 状态的空标签页
       const newTab = { 
         id: tabId, type: 'table', title: `📄 ${data.tableName}`, connectionId: data.connectionId, 
         schema: data.schemaName, table: data.tableName, loading: true, error: '', 
@@ -324,7 +342,6 @@ const handleNodeClick = (data) => {
       openTabs.value.push(newTab); 
       activeTab.value = tabId; 
       
-      // 2. 给 Vue 留 50 毫秒的喘息时间把标签页画出来，然后再去发繁重的请求
       setTimeout(() => {
         loadTableData(newTab);
       }, 50);
@@ -380,7 +397,9 @@ const addQueryTab = () => {
   const newTab = {
     id, type: 'query', title: `🔍 查询${nextQueryIndex.value++}`,
     connectionId: activeConnection.value.id, schema: activeSchema.value || '', 
-    schemaList: [], hintTables: {}, sql: '', loading: false, error: '', result: null
+    schemaList: [], hintTables: {}, sql: '', loading: false, error: '', result: null,
+    // 新增面板控制状态
+    showBottomPanel: true, editorHeight: 60, bottomTab: 'result', history: []
   };
   openTabs.value.push(newTab); activeTab.value = id;
   refreshSchemaList(newTab).then(() => {
@@ -408,12 +427,60 @@ const executeSqlForTab = async (tab) => {
   if (!sql) return ElMessage.warning('请输入或选中要执行的 SQL 语句');
   if (!tab.connectionId) return ElMessage.warning('请选择数据库连接');
   
+  const startTime = Date.now();
+  tab.loading = true; 
+  tab.error = ''; 
+  tab.result = null;
+  tab.showBottomPanel = true; // 每次执行强行展开底部面板
+  
   try {
-    tab.loading = true; tab.error = ''; tab.result = null;
     const result = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql });
-    if (!result.success) { tab.error = result.error; return; }
+    const duration = Date.now() - startTime;
+    
+    if (!result.success) { 
+      tab.error = result.error; 
+      tab.bottomTab = 'message';
+      tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '失败' });
+      return; 
+    }
+    
     tab.result = result.data || {};
-  } catch (e) { tab.error = e.message; } finally { tab.loading = false; }
+    tab.bottomTab = tab.result.isQuery ? 'result' : 'message'; // 根据执行结果类型跳向对应 Tab
+    tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '成功' });
+  } catch (e) { 
+    const duration = Date.now() - startTime;
+    tab.error = e.message; 
+    tab.bottomTab = 'message';
+    tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '失败' });
+  } finally { 
+    tab.loading = false; 
+  }
+};
+
+// ================= 拖拽分屏逻辑 =================
+const startDrag = (e, tab) => {
+  e.preventDefault();
+  const startY = e.clientY;
+  const startHeight = tab.editorHeight;
+  const container = e.target.parentElement;
+  const containerHeight = container.clientHeight;
+
+  const onMouseMove = (moveEvent) => {
+    const dy = moveEvent.clientY - startY;
+    const percentageChange = (dy / containerHeight) * 100;
+    let newHeight = startHeight + percentageChange;
+    if (newHeight < 15) newHeight = 15;
+    if (newHeight > 85) newHeight = 85;
+    tab.editorHeight = newHeight;
+  };
+
+  const onMouseUp = () => {
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  };
+
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
 };
 
 // ================= 连接管理弹窗 =================
@@ -479,35 +546,34 @@ const testConnection = async (config) => {
 .table-data-toolbar { padding-bottom: 10px; display: flex; align-items: center; gap: 15px; }
 .table-data-content { flex: 1; min-height: 0; }
 
+/* === 查询主面板弹性布局 === */
 .query-wrap { display: flex; flex-direction: column; height: calc(100vh - 130px); }
 .query-toolbar { display: flex; gap: 10px; align-items: center; padding-bottom: 10px; }
-.query-editor-container { flex: 1; border: 1px solid var(--el-border-color); border-radius: 4px; min-height: 150px; overflow: hidden; }
 
-/* 底部面板总容器 */
-.query-result-container {
-  height: 280px; margin-top: 10px; border: 1px solid var(--el-border-color); border-radius: 4px;
-  display: flex; flex-direction: column; overflow: hidden; background: var(--el-bg-color);
-}
+/* 上下拖拽相关样式 */
+.split-pane { flex: 1; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--el-border-color); border-radius: 4px; }
+.query-editor-container { overflow: hidden; display: flex; flex-direction: column; }
+.resizer { height: 6px; background-color: #f5f7fa; cursor: row-resize; border-top: 1px solid #ebeef5; border-bottom: 1px solid #ebeef5; transition: background 0.2s;}
+.resizer:hover, .resizer:active { background-color: #409eff; }
 
-/* 执行成功面板样式 */
-.success-panel {
-  padding: 20px;
-  color: #67c23a;
-  background-color: #f0f9eb;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-.success-title { font-size: 18px; font-weight: bold; margin-bottom: 15px; }
-.success-detail { font-size: 14px; margin-bottom: 5px; color: #333; font-family: Consolas, monospace; }
+/* 底部面板体系 */
+.query-bottom-panel { display: flex; flex-direction: column; overflow: hidden; background: #fff; }
+.bottom-panel-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ebeef5; background: #f8f9fa; }
+.bottom-tabs span { display: inline-block; padding: 8px 15px; cursor: pointer; font-size: 13px; color: #606266; }
+.bottom-tabs span:hover { color: #409eff; }
+.bottom-tabs span.active { color: #409eff; border-bottom: 2px solid #409eff; font-weight: bold; background: #fff;}
+.bottom-actions { margin-right: 10px; }
+.bottom-panel-content { flex: 1; overflow: hidden; }
+.tab-content-inner { height: 100%; display: flex; flex-direction: column; }
 
-/* 错误面板样式 */
-.error-panel { padding: 15px; color: #f56c6c; background-color: #fef0f0; height: 100%; overflow-y: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.5; }
-.error-title { font-weight: bold; margin-bottom: 8px; font-size: 14px; }
+/* 消息日志与文本样式 */
+.message-log { padding: 15px; overflow-y: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.6; }
+.error-text { color: #f56c6c; }
+.success-text { color: #67c23a; }
 
-/* 空面板样式 */
-.empty-result { height: 100%; display: flex; align-items: center; justify-content: center; background-color: #fafafa; }
+/* 面板隐藏时的恢复栏 */
+.restore-bar { text-align: center; padding: 4px; background: #f4f4f5; cursor: pointer; font-size: 12px; color: #909399; margin-top: 5px; border-radius: 4px; }
+.restore-bar:hover { color: #409eff; background: #ecf5ff; }
 
 .custom-tree-node { flex: 1; display: flex; align-items: center; justify-content: space-between; font-size: 14px; padding-right: 8px; overflow: hidden; }
 .node-label { display: flex; align-items: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
