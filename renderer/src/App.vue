@@ -108,6 +108,8 @@
                   :columns="tab.result.fields"
                   :loading="tab.loading"
                   :error="tab.error"
+                  :editable="true"
+                  @submit-edits="handleTableEdits(tab, $event)"
                 ></data-viewer>
               </div>
             </div>
@@ -324,6 +326,68 @@ const loadTableData = async (tab) => {
   }
 };
 
+// ================= 内联编辑提交逻辑 =================
+const handleTableEdits = async (tab, edits) => {
+  try {
+    tab.loading = true;
+    const conn = getConnectionById(tab.connectionId);
+    
+    // 1. 获取表的元数据，智能寻找主键 (PK)
+    const colRes = await window.electronAPI.getTableColumns({
+      connectionId: tab.connectionId, schema: tab.schema, table: tab.table
+    });
+    if (!colRes.success) throw new Error(colRes.error);
+
+    const pkCols = colRes.data.filter(c => c.primaryKey).map(c => c.name);
+    if (pkCols.length === 0) {
+      throw new Error(`【安全拦截】表 "${tab.table}" 没有主键！禁止使用内联编辑，防止导致整表被误覆盖。`);
+    }
+
+    // 2. 遍历所有修改过的行，生成对应的 UPDATE 语句并执行
+    for (const edit of edits) {
+      const { originalRow, updates } = edit;
+      
+      // 组装 SET 子句
+      const setClauses = [];
+      for (const [col, val] of Object.entries(updates)) {
+        const safeVal = val === null ? 'NULL' : `'${String(val).replace(/'/g, "''")}'`;
+        const safeCol = conn.dbType === 'mysql' ? `\`${col}\`` : `"${col}"`;
+        setClauses.push(`${safeCol} = ${safeVal}`);
+      }
+
+      // 组装 WHERE 主键限制子句
+      const whereClauses = [];
+      for (const pk of pkCols) {
+        const pkVal = originalRow[pk];
+        if (pkVal === undefined || pkVal === null) throw new Error(`主键 "${pk}" 的值为空，无法准确定位更新行！`);
+        const safePkVal = `'${String(pkVal).replace(/'/g, "''")}'`;
+        const safePk = conn.dbType === 'mysql' ? `\`${pk}\`` : `"${pk}"`;
+        whereClauses.push(`${safePk} = ${safePkVal}`);
+      }
+
+      // 生成完整的 SQL
+      const tableName = conn.dbType === 'mysql' ? `\`${tab.schema}\`.\`${tab.table}\`` : `"${tab.schema}"."${tab.table}"`;
+      const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')}`;
+
+      // 发送至后台执行
+      const execRes = await window.electronAPI.executeSql({
+        connectionId: tab.connectionId,
+        schema: tab.schema,
+        sql: sql
+      });
+      
+      if (!execRes.success) throw new Error(`数据更新失败: ${execRes.error}`);
+    }
+
+    ElMessage.success('🎉 修改已成功保存到数据库！');
+    await loadTableData(tab); // 保存成功后刷新表格呈现最新数据
+  } catch (err) {
+    ElMessage.error(err.message);
+  } finally {
+    tab.loading = false;
+  }
+};
+
 const handleNodeClick = (data) => {
   if (data.connectionId || data.id) activeConnection.value = getConnectionById(data.connectionId || data.id);
   if (data.type === 'schema') { activeSchema.value = data.schemaName; activeTable.value = ''; } 
@@ -398,7 +462,6 @@ const addQueryTab = () => {
     id, type: 'query', title: `🔍 查询${nextQueryIndex.value++}`,
     connectionId: activeConnection.value.id, schema: activeSchema.value || '', 
     schemaList: [], hintTables: {}, sql: '', loading: false, error: '', result: null,
-    // 新增面板控制状态
     showBottomPanel: true, editorHeight: 60, bottomTab: 'result', history: []
   };
   openTabs.value.push(newTab); activeTab.value = id;
@@ -431,7 +494,7 @@ const executeSqlForTab = async (tab) => {
   tab.loading = true; 
   tab.error = ''; 
   tab.result = null;
-  tab.showBottomPanel = true; // 每次执行强行展开底部面板
+  tab.showBottomPanel = true; 
   
   try {
     const result = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql });
@@ -445,7 +508,7 @@ const executeSqlForTab = async (tab) => {
     }
     
     tab.result = result.data || {};
-    tab.bottomTab = tab.result.isQuery ? 'result' : 'message'; // 根据执行结果类型跳向对应 Tab
+    tab.bottomTab = tab.result.isQuery ? 'result' : 'message'; 
     tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '成功' });
   } catch (e) { 
     const duration = Date.now() - startTime;
