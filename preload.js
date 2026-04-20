@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 对话框相关
   openFileDialog: () => ipcRenderer.invoke('dialog:open-file'),
   saveFileDialog: () => ipcRenderer.invoke('dialog:save-file'),
+
+  //AI 相关方法
+  getAiConfig: () => ipcRenderer.invoke('ai:get-config'),
+  saveAiConfig: (config) => ipcRenderer.invoke('ai:save-config', config),
+  generateSql: (params) => ipcRenderer.invoke('ai:generate-sql', params),
   
   // 错误处理
   onError: (callback) => ipcRenderer.on('error', (event, error) => callback(error))

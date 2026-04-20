@@ -3,6 +3,9 @@ const path = require('path');
 const Store = require('electron-store');
 const store = new Store();
 
+const AIService = require('./config/ai-service');
+const aiService = new AIService(store);
+
 // 数据库连接管理
 const dbConnections = require('./config/db-config');
 
@@ -217,4 +220,39 @@ ipcMain.handle('dialog:save-file', async () => {
     filters: [{ name: 'SQL Files', extensions: ['sql'] }]
   });
   return result;
+});
+
+// ================= 新增：AI 配置与功能 =================
+// 获取 AI 配置
+ipcMain.handle('ai:get-config', async () => {
+  return store.get('ai.config', {
+    provider: 'openai',
+    apiKey: '',
+    baseUrl: '[https://api.openai.com/v1](https://api.openai.com/v1)',
+    model: 'gpt-3.5-turbo'
+  });
+});
+
+// 保存 AI 配置
+ipcMain.handle('ai:save-config', async (event, config) => {
+  try {
+    store.set('ai.config', config);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// 自然语言转 SQL
+ipcMain.handle('ai:generate-sql', async (event, { prompt, connectionId, schema }) => {
+  try {
+    const connections = store.get('db.connections', []);
+    const connection = connections.find(item => item.id === connectionId);
+    
+    // 允许不传 connection，此时不使用数据库上下文辅助
+    const result = await aiService.generateSql(prompt, connection, schema);
+    return result;
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 });

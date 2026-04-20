@@ -49,6 +49,10 @@
         </template>
       </el-tree>
 
+      <div class="sidebar-footer">
+        <el-button text @click="openAiConfigDialog" style="width: 100%;">⚙️ AI 助手设置</el-button>
+      </div>
+
       <el-dialog :title="isEditMode ? '编辑数据库连接' : '新建数据库连接'" v-model="showConnectDialog" width="600px">
         <db-connect 
           :initial-data="currentEditData" 
@@ -142,6 +146,10 @@
                   ▶ 执行 (选中/全部)
                 </el-button>
                 <el-button size="small" @click="tab.sql = ''">清空</el-button>
+
+                <el-button type="success" size="small" style="margin-left: auto;" @click="openAiPromptDialog(tab)">
+                  ✨ AI 智能生成 SQL
+                </el-button>
               </div>
 
               <div class="split-pane" ref="splitPane">
@@ -209,6 +217,59 @@
         </el-tabs>
       </el-main>
     </el-container>
+
+    <el-dialog title="⚙️ AI 助手配置" v-model="showAiConfigDialog" width="500px">
+      <el-form :model="aiConfig" label-width="100px">
+        <el-form-item label="服务提供商">
+          <el-select v-model="aiConfig.provider" style="width: 100%;">
+            <el-option label="OpenAI (或兼容接口)" value="openai" />
+            <el-option label="DeepSeek (需配置BaseUrl)" value="deepseek" />
+            <el-option label="通义千问 (需配置BaseUrl)" value="dashscope" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="API Key">
+          <el-input v-model="aiConfig.apiKey" type="password" show-password placeholder="sk-..." />
+        </el-form-item>
+        <el-form-item label="Base URL">
+          <el-input v-model="aiConfig.baseUrl" placeholder="默认: https://api.openai.com/v1" />
+          <div class="form-tip">如果你使用的是中转或国产大模型，请填入对应的 Base URL。</div>
+        </el-form-item>
+        <el-form-item label="模型名称">
+          <el-input v-model="aiConfig.model" placeholder="如: gpt-3.5-turbo, deepseek-chat" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="showAiConfigDialog = false">取 消</el-button>
+          <el-button type="primary" @click="saveAiConfig">保 存</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showAiPromptDialog" title="✨ AI 智能生成 SQL" width="600px">
+      <el-alert
+        title="AI 会结合当前选择的数据库结构为您自动生成精准的 SQL 语句。"
+        type="info"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 15px;"
+      />
+      <el-input
+        v-model="aiPromptInput"
+        type="textarea"
+        :rows="4"
+        placeholder="例如：查询所有年龄大于 20 岁并且在研发部的员工姓名，按照入职时间倒序排列..."
+      />
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="showAiPromptDialog = false" :disabled="aiGenerating">取 消</el-button>
+          <el-button type="primary" @click="generateSqlWithAi" :loading="aiGenerating">
+            {{ aiGenerating ? '生成中...' : '开始生成 SQL' }}
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
   </el-container>
 </template>
 
@@ -326,13 +387,11 @@ const loadTableData = async (tab) => {
   }
 };
 
-// ================= 内联编辑提交逻辑 =================
 const handleTableEdits = async (tab, edits) => {
   try {
     tab.loading = true;
     const conn = getConnectionById(tab.connectionId);
     
-    // 1. 获取表的元数据，智能寻找主键 (PK)
     const colRes = await window.electronAPI.getTableColumns({
       connectionId: tab.connectionId, schema: tab.schema, table: tab.table
     });
@@ -343,11 +402,8 @@ const handleTableEdits = async (tab, edits) => {
       throw new Error(`【安全拦截】表 "${tab.table}" 没有主键！禁止使用内联编辑，防止导致整表被误覆盖。`);
     }
 
-    // 2. 遍历所有修改过的行，生成对应的 UPDATE 语句并执行
     for (const edit of edits) {
       const { originalRow, updates } = edit;
-      
-      // 组装 SET 子句
       const setClauses = [];
       for (const [col, val] of Object.entries(updates)) {
         const safeVal = val === null ? 'NULL' : `'${String(val).replace(/'/g, "''")}'`;
@@ -355,7 +411,6 @@ const handleTableEdits = async (tab, edits) => {
         setClauses.push(`${safeCol} = ${safeVal}`);
       }
 
-      // 组装 WHERE 主键限制子句
       const whereClauses = [];
       for (const pk of pkCols) {
         const pkVal = originalRow[pk];
@@ -365,11 +420,9 @@ const handleTableEdits = async (tab, edits) => {
         whereClauses.push(`${safePk} = ${safePkVal}`);
       }
 
-      // 生成完整的 SQL
       const tableName = conn.dbType === 'mysql' ? `\`${tab.schema}\`.\`${tab.table}\`` : `"${tab.schema}"."${tab.table}"`;
       const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')}`;
 
-      // 发送至后台执行
       const execRes = await window.electronAPI.executeSql({
         connectionId: tab.connectionId,
         schema: tab.schema,
@@ -380,7 +433,7 @@ const handleTableEdits = async (tab, edits) => {
     }
 
     ElMessage.success('🎉 修改已成功保存到数据库！');
-    await loadTableData(tab); // 保存成功后刷新表格呈现最新数据
+    await loadTableData(tab); 
   } catch (err) {
     ElMessage.error(err.message);
   } finally {
@@ -588,6 +641,92 @@ const testConnection = async (config) => {
     else ElMessage.error(`连接测试失败: ${result.error}`);
   } catch (error) { ElMessage.error(`测试失败: ${error.message}`); } finally { loading.value = false; }
 };
+
+// ================= 【核心新增】AI 助手逻辑 (设置与生成) =================
+const showAiConfigDialog = ref(false);
+const aiConfig = reactive({ provider: 'openai', apiKey: '', baseUrl: '', model: '' });
+
+const openAiConfigDialog = async () => {
+  try {
+    if (window.electronAPI && window.electronAPI.getAiConfig) {
+      const config = await window.electronAPI.getAiConfig();
+      if (config) {
+        Object.assign(aiConfig, config);
+      }
+    }
+    showAiConfigDialog.value = true;
+  } catch (err) {
+    ElMessage.error("获取 AI 配置失败");
+  }
+};
+
+const saveAiConfig = async () => {
+  if (!aiConfig.apiKey) {
+    return ElMessage.warning('API Key 不能为空！');
+  }
+  try {
+    const res = await window.electronAPI.saveAiConfig(JSON.parse(JSON.stringify(aiConfig)));
+    if (res.success) {
+      ElMessage.success('AI 配置保存成功！');
+      showAiConfigDialog.value = false;
+    } else {
+      ElMessage.error('保存失败: ' + res.error);
+    }
+  } catch (err) {
+    ElMessage.error(err.message);
+  }
+};
+
+const showAiPromptDialog = ref(false);
+const aiPromptInput = ref('');
+const aiGenerating = ref(false);
+const targetAiTab = ref(null);
+
+const openAiPromptDialog = (tab) => {
+  if (!tab.connectionId) return ElMessage.warning('请先选择数据库连接！');
+  targetAiTab.value = tab;
+  aiPromptInput.value = '';
+  showAiPromptDialog.value = true;
+};
+
+const generateSqlWithAi = async () => {
+  if (!aiPromptInput.value.trim()) return ElMessage.warning('请输入需求描述！');
+  const tab = targetAiTab.value;
+  
+  aiGenerating.value = true;
+  try {
+    const res = await window.electronAPI.generateSql({
+      prompt: aiPromptInput.value,
+      connectionId: tab.connectionId,
+      schema: tab.schema
+    });
+
+    if (res.success && res.sql) {
+      // 成功后，将生成的 SQL 拼接到编辑器末尾
+      const editorRef = editorRefs.value[tab.id];
+      if (editorRef) {
+        const currentSql = editorRef.getSelectionOrAll();
+        const appendSql = `\n\n-- AI 自动生成 (${aiPromptInput.value}):\n${res.sql}\n`;
+        editorRef.setSql(currentSql + appendSql);
+      } else {
+        tab.sql += `\n\n-- AI 自动生成:\n${res.sql}\n`;
+      }
+      ElMessage.success('✨ SQL 生成成功！已添加到编辑器。');
+      showAiPromptDialog.value = false;
+    } else {
+      throw new Error(res.error || '大模型返回为空');
+    }
+  } catch (err) {
+    if (err.message.includes('未配置') || err.message.includes('API key')) {
+      ElMessageBox.confirm('您尚未配置 AI API Key，或者 Key 无效。是否立即前往配置？', '提示', { type: 'warning' })
+        .then(() => openAiConfigDialog());
+    } else {
+      ElMessage.error('AI 生成失败: ' + err.message);
+    }
+  } finally {
+    aiGenerating.value = false;
+  }
+};
 </script>
 
 <style scoped>
@@ -597,6 +736,11 @@ const testConnection = async (config) => {
 .header-btn { flex: 1; margin-left: 0 !important; }
 .refresh-tree-btn { flex: 0 0 auto !important; padding: 8px 12px !important; }
 .connection-tree { flex: 1; padding: 8px; overflow: auto; }
+
+/* === 【新增】左侧边栏底部的 AI 设置区 === */
+.sidebar-footer { padding: 10px; border-top: 1px solid var(--el-border-color); text-align: center; }
+.form-tip { font-size: 12px; color: #909399; margin-top: 4px; line-height: 1.4; }
+
 .right { height: 100%; }
 .topbar { border-bottom: 1px solid var(--el-border-color); display: flex; align-items: center; justify-content: space-between; }
 .crumb { margin-left: 10px; color: var(--el-text-color-secondary); }
