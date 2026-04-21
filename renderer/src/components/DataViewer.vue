@@ -102,9 +102,12 @@ const lobTarget = ref(null);
 // ================= 2. 再执行 Watch (安全挂载) =================
 // 监听外界数据变化，当翻页或重新查询时，重置当前网格数据和修改状态
 watch(() => props.data, (newVal) => {
-  displayData.value = JSON.parse(JSON.stringify(newVal || []));
+  // 【修复核心代码】：增加 BigInt 的安全转换逻辑，防止 JSON.stringify 崩溃导致界面卡死
+  displayData.value = JSON.parse(JSON.stringify(newVal || [], (key, value) => {
+    return typeof value === 'bigint' ? value.toString() : value;
+  }));
   modifiedMap.value = {};
-  editingCell.value = null; // 现在它能正确找到变量了
+  editingCell.value = null; 
 }, { immediate: true, deep: true });
 
 // ================= 3. 内联编辑核心逻辑 =================

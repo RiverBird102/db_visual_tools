@@ -328,9 +328,13 @@ const aiPromptInput = ref('');
 const aiGenerating = ref(false);
 
 // 存储各个 Editor 的实例
-const editorRefs = ref({});
+const editorRefs = {};
 const setEditorRef = (el, id) => {
-  if (el) editorRefs.value[id] = el;
+  if (el) {
+    editorRefs[id] = el;
+  } else {
+    delete editorRefs[id]; // 切换/关闭标签时释放内存
+  }
 };
 
 const treeProps = reactive({ label: 'label', children: 'children', isLeaf: 'isLeaf' });
@@ -568,7 +572,7 @@ const removeTab = (targetId) => {
 };
 
 const executeSqlForTab = async (tab) => {
-  const editorRef = editorRefs.value[tab.id];
+  const editorRef = editorRefs[tab.id]; // 删除 .value
   const sql = editorRef ? editorRef.getSelectionOrAll().trim() : (tab.sql || '').trim();
   
   if (!sql) return ElMessage.warning('请输入或选中要执行的 SQL 语句');
@@ -744,7 +748,7 @@ const generateSqlWithAi = async () => {
 const insertSqlToEditor = (sqlToInsert) => {
   const currentTab = openTabs.value.find(t => t.id === activeTab.value);
   if (currentTab) {
-    const editorRef = editorRefs.value[currentTab.id];
+    const editorRef = editorRefs[currentTab.id];
     if (editorRef && editorRef.insertText) {
       editorRef.insertText(`\n-- AI 自动生成:\n${sqlToInsert}\n`);
     } else {
