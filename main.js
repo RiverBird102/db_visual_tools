@@ -264,3 +264,23 @@ ipcMain.handle('ai:analyze-query', async (event, { sql, explainPlan, columns }) 
     return { success: false, error: error.message };
   }
 });
+
+// AI 智能生成测试数据
+ipcMain.handle('ai:generate-mock-data', async (event, { tableName, columns, count, instruction }) => {
+  try {
+    const result = await aiService.generateMockData(tableName, columns, count, instruction);
+    return result;
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// AI 数据洞察
+ipcMain.handle('ai:generate-insight', async (event, dataRows) => {
+  try {
+    const result = await aiService.generateDataInsight(dataRows);
+    return result;
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});

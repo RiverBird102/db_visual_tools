@@ -1,7 +1,7 @@
 <template>
   <div class="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
     
-    <aside class="w-72 flex flex-col bg-white border-r border-slate-200 shadow-sm z-10">
+    <aside class="w-72 flex flex-col bg-white border-r border-slate-200 shadow-sm z-10 shrink-0">
       <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
         <h2 class="font-bold text-sm text-slate-700 tracking-tight">数据库资源</h2>
         <div class="flex gap-1">
@@ -45,9 +45,9 @@
         </el-tree>
       </div>
 
-      <div class="p-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
-        <button @click="openAiConfigDialog" class="flex items-center gap-2 text-xs text-slate-600 hover:text-blue-600 transition-colors">
-          <Settings :size="14" /> AI 助手设置
+      <div class="p-3 border-t border-slate-200 bg-slate-50">
+        <button @click="openAiConfigDialog" class="flex items-center gap-2 text-xs text-slate-600 hover:text-blue-600 transition-colors w-full">
+          <Settings :size="14" /> AI 助手高级配置
         </button>
       </div>
     </aside>
@@ -88,6 +88,11 @@
             <div v-if="tab.type === 'table'" class="flex flex-col h-full p-2">
               <div class="flex items-center gap-3 pb-2 border-b border-slate-100 mb-2">
                 <el-button type="primary" size="small" @click="loadTableData(tab)" :loading="tab.loading" class="shadow-sm">刷新数据</el-button>
+                
+                <el-button type="success" size="small" @click="openMockDataDialog(tab)" class="shadow-sm bg-emerald-500 hover:bg-emerald-600 border-none">
+                  <span class="flex items-center gap-1"><Dna :size="14"/> AI 智能造数</span>
+                </el-button>
+
                 <el-pagination
                   v-model:current-page="tab.currentPage"
                   v-model:page-size="tab.pageSize"
@@ -127,7 +132,7 @@
                 </el-button>
 
                 <el-button type="warning" size="small" @click="handleAiDiagnosis(tab)" class="shadow-sm bg-amber-500 hover:bg-amber-600 border-none">
-                  <span class="flex items-center gap-1"><Activity :size="12"/> AI 诊断</span>
+                  <span class="flex items-center gap-1"><Activity :size="12"/> AI 慢查询诊断</span>
                 </el-button>
                 
                 <el-button size="small" @click="tab.sql = ''">清空</el-button>
@@ -158,29 +163,28 @@
                       </button>
                     </div>
                     <button @click="tab.showBottomPanel = false" class="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1">
-                      <ChevronDown :size="14"/> 关闭
+                      <ChevronDown :size="14"/> 收起
                     </button>
                   </div>
                   
                   <div class="flex-1 overflow-hidden">
                     <div v-show="tab.bottomTab === 'result'" class="h-full">
                       <data-viewer v-if="tab.result && tab.result.isQuery" :data="tab.result.rows" :columns="tab.result.fields" :loading="tab.loading"></data-viewer>
-                      <div v-else class="h-full flex items-center justify-center text-slate-400 text-sm">无结果集返回</div>
+                      <div v-else class="h-full flex items-center justify-center text-slate-400 text-sm">等待数据返回...</div>
                     </div>
 
                     <div v-show="tab.bottomTab === 'message'" class="h-full p-4 overflow-y-auto font-mono text-sm bg-slate-900 text-slate-300">
-                      <div v-if="tab.error" class="text-red-400">❌ Error: {{ tab.error }}</div>
+                      <div v-if="tab.error" class="text-red-400">❌ 执行出错: {{ tab.error }}</div>
                       <div v-else-if="tab.result && tab.result.isQuery === false" class="text-green-400">
-                        ✅ {{ tab.result.message }} <span v-if="tab.result.affectedRows !== undefined"> (受影响行数: {{ tab.result.affectedRows }})</span>
+                        ✅ 操作成功 <span v-if="tab.result.affectedRows !== undefined"> (影响行数: {{ tab.result.affectedRows }})</span>
                       </div>
-                      <div v-else-if="tab.result && tab.result.isQuery" class="text-green-400">✅ 查询执行成功，返回 {{ tab.result.rows.length }} 条记录。</div>
-                      <div v-else class="text-slate-500">等待执行...</div>
+                      <div v-else-if="tab.result && tab.result.isQuery" class="text-green-400">✅ 查询执行成功。</div>
                     </div>
 
                     <div v-show="tab.bottomTab === 'history'" class="h-full">
                       <el-table :data="tab.history" size="small" border height="100%">
-                        <el-table-column prop="time" label="执行时间" width="160"></el-table-column>
-                        <el-table-column prop="sql" label="SQL语句" show-overflow-tooltip></el-table-column>
+                        <el-table-column prop="time" label="时间" width="160"></el-table-column>
+                        <el-table-column prop="sql" label="SQL内容" show-overflow-tooltip></el-table-column>
                         <el-table-column prop="duration" label="耗时(ms)" width="90"></el-table-column>
                         <el-table-column prop="status" label="状态" width="80">
                           <template #default="{row}">
@@ -192,9 +196,53 @@
                   </div>
                 </div>
               </div>
+            </div>
 
-              <div v-if="!tab.showBottomPanel" class="text-center py-1 bg-slate-100 hover:bg-blue-50 cursor-pointer text-xs text-slate-500 hover:text-blue-600 mt-2 rounded border border-slate-200 transition-colors" @click="tab.showBottomPanel = true">
-                ⬆️ 展开结果面板
+            <div v-else-if="tab.type === 'insight'" class="flex flex-col h-full p-6 bg-slate-100 overflow-y-auto custom-scrollbar">
+              <div class="max-w-6xl mx-auto w-full">
+                <div class="flex items-center justify-between mb-8">
+                  <div class="flex items-center gap-3">
+                    <div class="p-3 bg-blue-600 rounded-xl shadow-lg text-white">
+                      <BarChart2 :size="24" />
+                    </div>
+                    <div>
+                      <h2 class="text-xl font-bold text-slate-800">AI 智能数据洞察报告</h2>
+                      <p class="text-xs text-slate-500 mt-1">基于大模型的自动化可视化分析与商业决策支持</p>
+                    </div>
+                  </div>
+                  <el-button @click="removeTab(tab.id)" plain size="small">关闭报告</el-button>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  <div class="lg:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
+                    <div class="flex items-center justify-between mb-4 shrink-0">
+                      <span class="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <PieChart :size="16" class="text-blue-500" /> 交互式数据图表
+                      </span>
+                    </div>
+                    <div :id="'chart-' + tab.id" class="w-full flex-1 min-h-[400px]"></div>
+                  </div>
+
+                  <div class="flex flex-col gap-6">
+                    <div class="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-6 rounded-2xl shadow-xl relative overflow-hidden flex-1">
+                      <Sparkles class="absolute top-[-20px] right-[-20px] opacity-10 w-40 h-40" />
+                      <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
+                        <Bot :size="22" /> 深度分析建议
+                      </h3>
+                      <div class="text-sm leading-relaxed opacity-95 whitespace-pre-wrap font-medium">
+                        {{ tab.analysis }}
+                      </div>
+                    </div>
+                    
+                    <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm shrink-0">
+                      <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">洞察数据概览</h4>
+                      <div class="flex items-center justify-between">
+                        <span class="text-sm text-slate-600">样本取样量</span>
+                        <span class="text-lg font-bold text-blue-600">{{ tab.originalRows.length }} 行</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -203,12 +251,12 @@
       </div>
     </main>
 
-    <aside class="w-80 flex flex-col bg-slate-50 border-l border-slate-200 shadow-sm z-10">
+    <aside class="w-80 flex flex-col bg-slate-50 border-l border-slate-200 shadow-sm z-10 shrink-0">
       <div class="flex border-b border-slate-200 bg-white">
         <button v-for="mode in ['chat', 'insight']" :key="mode"
                 @click="aiPanelTab = mode"
                 :class="aiPanelTab === mode ? 'text-blue-600 border-b-2 border-blue-600 font-bold bg-blue-50/30' : 'text-slate-500 hover:bg-slate-50'"
-                class="flex-1 py-3 text-sm transition-all flex items-center justify-center gap-2">
+                class="flex-1 py-4 text-sm transition-all flex items-center justify-center gap-2 outline-none">
           <Sparkles v-if="mode === 'chat'" :size="16" /> 
           <BarChart2 v-else :size="16" />
           {{ mode === 'chat' ? '智能生成' : '数据洞察' }}
@@ -216,63 +264,68 @@
       </div>
 
       <div v-show="aiPanelTab === 'chat'" class="flex-1 flex flex-col p-4 overflow-hidden">
-        <div class="flex-1 overflow-y-auto space-y-4 mb-4 pr-2 custom-scrollbar text-sm">
-          <div class="text-center text-xs text-slate-400 mb-4 bg-slate-200/50 py-1 rounded">
-            AI 会结合当前选中的数据库为您生成 SQL
-          </div>
-          
+        <div class="flex-1 overflow-y-auto space-y-4 mb-4 pr-2 custom-scrollbar text-sm" id="chat-container">
           <div v-for="(msg, i) in aiChatHistory" :key="i" 
                :class="msg.role === 'user' ? 'ml-8 items-end' : 'mr-8 items-start'"
                class="flex flex-col">
-            <span class="text-[10px] text-slate-400 mb-1 px-1 flex items-center gap-1">
-              <User v-if="msg.role === 'user'" :size="10"/>
-              <Bot v-else :size="10" class="text-blue-500"/>
-              {{ msg.role === 'user' ? 'You' : 'AI Assistant' }}
-            </span>
-            <div :class="msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-700'"
-                 class="p-3 rounded-xl shadow-sm leading-relaxed whitespace-pre-wrap font-sans">
+            <div :class="msg.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-700 rounded-tl-none'"
+                 class="p-3 rounded-2xl shadow-sm leading-relaxed whitespace-pre-wrap">
               {{ msg.content }}
             </div>
-            <button v-if="msg.role === 'ai' && msg.sql" @click="insertSqlToEditor(msg.sql)" class="mt-1 text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 px-1">
-              <ArrowLeftToLine :size="12"/> 插入到编辑器
+            <button v-if="msg.role === 'ai' && msg.sql" @click="insertSqlToEditor(msg.sql)" class="mt-2 text-xs text-blue-600 font-bold flex items-center gap-1 px-1">
+              <ArrowLeftToLine :size="12"/> 插入到当前编辑器
             </button>
           </div>
-          
-          <div v-if="aiGenerating" class="flex gap-1 ml-2 mt-4">
-            <span class="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></span>
-            <span class="w-2 h-2 bg-blue-400 rounded-full animate-bounce delay-75"></span>
-            <span class="w-2 h-2 bg-blue-400 rounded-full animate-bounce delay-150"></span>
-          </div>
+          <div v-if="aiGenerating" class="flex gap-1 ml-2 mt-4"><span class="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></span></div>
         </div>
 
         <div class="relative shrink-0">
-          <textarea v-model="aiPromptInput" 
-                    placeholder="描述你的查询需求..." 
-                    @keydown.ctrl.enter="generateSqlWithAi"
-                    class="w-full h-24 bg-white border border-slate-300 rounded-xl p-3 pr-10 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none shadow-sm resize-none transition-all"></textarea>
+          <textarea v-model="aiPromptInput" placeholder="描述您的 SQL 查询需求..." @keydown.ctrl.enter="generateSqlWithAi"
+                    class="w-full h-24 bg-white border border-slate-300 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-blue-500 outline-none shadow-sm resize-none transition-all"></textarea>
           <button @click="generateSqlWithAi" :disabled="aiGenerating || !aiPromptInput.trim()"
-                  class="absolute bottom-3 right-3 text-white bg-blue-600 p-1.5 rounded-lg hover:bg-blue-700 disabled:bg-slate-300 transition-colors">
+                  class="absolute bottom-3 right-3 text-white bg-blue-600 p-2 rounded-xl hover:bg-blue-700 disabled:bg-slate-300">
             <Send :size="16" />
           </button>
         </div>
       </div>
 
-      <div v-show="aiPanelTab === 'insight'" class="flex-1 p-4 overflow-y-auto flex flex-col items-center justify-center text-slate-400 text-sm">
-        <BarChart2 :size="48" class="mb-4 opacity-20" />
-        <p>执行查询后，</p>
-        <p>AI 将在此处自动生成图表分析</p>
+      <div v-show="aiPanelTab === 'insight'" class="flex-1 p-6 flex flex-col items-center justify-center text-center">
+        <div v-if="insightLoading" class="flex flex-col items-center">
+          <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+          <p class="text-sm text-slate-500 font-medium">大模型正在生成图表代码...</p>
+        </div>
+        <div v-else>
+          <div class="w-16 h-16 bg-white border border-slate-200 rounded-2xl flex items-center justify-center mb-6 mx-auto shadow-sm">
+            <PieChart :size="32" class="text-blue-500" />
+          </div>
+          <p class="text-sm text-slate-600 mb-2 font-bold">数据一键智能化</p>
+          <p class="text-xs text-slate-400 mb-8 leading-relaxed">AI 将自动分析查询结果的结果集，<br/>并生成可交互的 ECharts 看板。</p>
+          <el-button type="primary" class="w-full h-10 rounded-xl" @click="generateInsightFromCurrentTab">✨ 生成 AI 数据洞察报告</el-button>
+        </div>
       </div>
     </aside>
 
     <el-dialog v-model="showAiAnalysisDialog" title="🔬 AI 慢查询诊断报告" width="800px">
-      <div v-loading="analysisLoading" class="min-h-[300px] max-h-[60vh] overflow-y-auto">
-        <div v-if="aiAnalysisResult" class="p-2">
-          <pre class="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-700 bg-slate-50 p-4 rounded-lg border border-slate-200">{{ aiAnalysisResult }}</pre>
-        </div>
-        <el-empty v-else-if="!analysisLoading" description="正在深度分析执行计划，请稍候..." />
+      <div v-loading="analysisLoading" class="min-h-[300px] max-h-[60vh] overflow-y-auto p-2">
+        <div v-if="aiAnalysisResult" class="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-700 bg-slate-50 p-5 rounded-xl border border-slate-200">{{ aiAnalysisResult }}</div>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="showMockDialog" title="🧬 AI 智能造数引擎" width="520px">
+      <div v-loading="mockGenerating" element-loading-text="大模型正在推导字段含义并生成数据，请稍候...">
+        <el-alert title="一键入库" type="info" description="AI 会自动根据表结构生成高度逼真的测试数据并直接执行插入。" show-icon class="mb-5" :closable="false" />
+        <el-form label-position="top">
+          <el-form-item label="生成数据量">
+            <el-input-number v-model="mockForm.count" :min="1" :max="100" class="w-full" />
+          </el-form-item>
+          <el-form-item label="特定约束要求 (可选)">
+            <el-input v-model="mockForm.instruction" type="textarea" :rows="3" placeholder="例如：生成北京地区的手机号，姓名要真实，金额在100-500之间..." />
+          </el-form-item>
+        </el-form>
       </div>
       <template #footer>
-        <el-button @click="showAiAnalysisDialog = false">关闭报告</el-button>
+        <el-button @click="showMockDialog = false" :disabled="mockGenerating">取消</el-button>
+        <el-button type="success" @click="executeMockDataGeneration" :loading="mockGenerating" class="bg-emerald-600 border-none">生成并一键入库</el-button>
       </template>
     </el-dialog>
 
@@ -280,31 +333,26 @@
       <db-connect :initial-data="currentEditData" @save="saveConnection" @test="testConnection" @cancel="showConnectDialog = false"></db-connect>
     </el-dialog>
 
-    <el-dialog title="⚙️ AI 助手配置" v-model="showAiConfigDialog" width="500px">
+    <el-dialog title="⚙️ AI 助手高级配置" v-model="showAiConfigDialog" width="500px">
       <el-form :model="aiConfig" label-width="100px">
-        <el-form-item label="服务提供商">
-          <el-select v-model="aiConfig.provider" style="width: 100%;">
-            <el-option label="OpenAI (或兼容接口)" value="openai" />
-            <el-option label="DeepSeek (需配置BaseUrl)" value="deepseek" />
-            <el-option label="通义千问 (需配置BaseUrl)" value="dashscope" />
+        <el-form-item label="服务商">
+          <el-select v-model="aiConfig.provider" class="w-full">
+            <el-option label="OpenAI / DeepSeek / 通义" value="openai" />
           </el-select>
         </el-form-item>
         <el-form-item label="API Key">
-          <el-input v-model="aiConfig.apiKey" type="password" show-password placeholder="sk-..." />
+          <el-input v-model="aiConfig.apiKey" type="password" show-password />
         </el-form-item>
         <el-form-item label="Base URL">
-          <el-input v-model="aiConfig.baseUrl" placeholder="默认: https://api.openai.com/v1" />
-          <div class="text-xs text-slate-400 mt-1">如果你使用的是中转或国产大模型，请填入对应的 Base URL。</div>
+          <el-input v-model="aiConfig.baseUrl" placeholder="https://api.openai.com/v1" />
         </el-form-item>
         <el-form-item label="模型名称">
-          <el-input v-model="aiConfig.model" placeholder="如: gpt-3.5-turbo, deepseek-chat" />
+          <el-input v-model="aiConfig.model" placeholder="gpt-3.5-turbo" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="showAiConfigDialog = false">取 消</el-button>
-          <el-button type="primary" @click="saveAiConfig">保 存</el-button>
-        </span>
+        <el-button @click="showAiConfigDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveAiConfig">保存配置</el-button>
       </template>
     </el-dialog>
 
@@ -312,24 +360,24 @@
 </template>
 
 <script setup>
-import { ref, reactive, nextTick } from 'vue';
+import { ref, reactive, nextTick, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import * as echarts from 'echarts'; // 【核心】：引入 ECharts
+
+// 组件与图标引入
 import DbConnect from './components/DbConnect.vue';
 import SqlEditor from './components/SqlEditor.vue';
 import DataViewer from './components/DataViewer.vue';
-
-// 引入现代图标 (新增了 Activity 图标)
 import { 
   Plus, RefreshCw, Edit3, Trash2, Zap, Database, Table as TableIcon,
-  Play, Settings, Sparkles, MessageSquare, BarChart2, ChevronDown, 
-  Send, Bot, User, ArrowLeftToLine, FileCode2, Activity
+  Play, Settings, Sparkles, Bot, User, Send, ChevronDown, 
+  ArrowLeftToLine, FileCode2, Activity, Dna, BarChart2, PieChart
 } from 'lucide-vue-next';
 
-// 基础状态
+// ================= UI 基础状态 =================
 const showConnectDialog = ref(false);
 const isEditMode = ref(false);
 const currentEditData = ref(null);
-const loading = ref(false);
 const activeConnection = ref(null);
 const activeSchema = ref('');
 const activeTable = ref('');
@@ -337,76 +385,142 @@ const openTabs = ref([]);
 const activeTab = ref(''); 
 const treeRenderKey = ref(0); 
 const allConnections = ref([]); 
+const loading = ref(false);
 
-// === AI 面板状态 ===
+// ================= AI 面板状态 =================
 const aiPanelTab = ref('chat');
 const aiChatHistory = ref([]);
 const aiPromptInput = ref('');
 const aiGenerating = ref(false);
 
-// === 【新增】：AI 诊断状态 ===
+// AI 诊断状态
 const showAiAnalysisDialog = ref(false);
 const analysisLoading = ref(false);
 const aiAnalysisResult = ref('');
 
-// 存储各个 Editor 的实例
+// AI 造数状态
+const showMockDialog = ref(false);
+const mockGenerating = ref(false);
+const mockTargetTab = ref(null);
+const mockForm = reactive({ count: 10, instruction: '' });
+
+// AI 数据洞察状态
+const insightLoading = ref(false);
+
+// AI 配置状态
+const showAiConfigDialog = ref(false);
+const aiConfig = reactive({ provider: 'openai', apiKey: '', baseUrl: '', model: '' });
+
+// Editor 实例管理
 const editorRefs = {};
 const setEditorRef = (el, id) => {
-  if (el) {
-    editorRefs[id] = el;
-  } else {
-    delete editorRefs[id]; // 切换/关闭标签时释放内存
-  }
+  if (el) editorRefs[id] = el;
+  else delete editorRefs[id];
 };
 
 const treeProps = reactive({ label: 'label', children: 'children', isLeaf: 'isLeaf' });
 const getConnectionById = (id) => allConnections.value.find(c => c.id === id);
 
+onMounted(() => {
+  loadConnections();
+});
+
+// ================= 1. 数据库树形与连接逻辑 =================
+
 const loadConnections = async () => { treeRenderKey.value += 1; };
 
 const loadTreeNode = async (node, resolve) => {
   if (node.level === 0) {
-    const res = await window.electronAPI.getDbConnections();
-    if (res.success) {
-      allConnections.value = res.data;
-      const nodes = res.data.map(conn => ({
-        ...conn, label: conn.name, type: 'connection', treeId: `conn_${conn.id}`, isLeaf: false
-      }));
-      return resolve(nodes);
-    }
-    return resolve([]);
+    try {
+      const res = await window.electronAPI.getDbConnections();
+      if (res.success) {
+        allConnections.value = res.data;
+        return resolve(res.data.map(conn => ({ ...conn, label: conn.name, type: 'connection', treeId: `conn_${conn.id}`, isLeaf: false })));
+      }
+    } catch(e) { return resolve([]); }
   }
   if (node.level === 1) {
     try {
       const res = await window.electronAPI.listSchemas({ connectionId: node.data.id });
-      if (res.success) {
-        const nodes = res.data.map(schema => ({
-          label: schema, type: 'schema', connectionId: node.data.id, schemaName: schema, treeId: `schema_${node.data.id}_${schema}`, isLeaf: false
-        }));
-        return resolve(nodes);
-      }
-    } catch (error) {}
-    return resolve([]);
+      if (res.success) return resolve(res.data.map(s => ({ label: s, type: 'schema', connectionId: node.data.id, schemaName: s, treeId: `schema_${node.data.id}_${s}`, isLeaf: false })));
+    } catch(e) { return resolve([]); }
   }
   if (node.level === 2) {
     try {
-      const res = await window.electronAPI.listTables({
-        connectionId: node.data.connectionId, schema: node.data.schemaName
-      });
+      const res = await window.electronAPI.listTables({ connectionId: node.data.connectionId, schema: node.data.schemaName });
       if (res.success) {
-        const nodes = res.data.map(table => {
-          const tableName = typeof table === 'object' ? (table.tableName || table.name) : table;
-          return {
-            label: tableName, type: 'table', connectionId: node.data.connectionId, schemaName: node.data.schemaName, tableName: tableName, treeId: `table_${node.data.connectionId}_${node.data.schemaName}_${tableName}`, isLeaf: true
-          };
-        });
-        return resolve(nodes);
+        return resolve(res.data.map(t => {
+          const name = typeof t === 'object' ? (t.tableName || t.name) : t;
+          return { label: name, type: 'table', connectionId: node.data.connectionId, schemaName: node.data.schemaName, tableName: name, treeId: `table_${node.data.connectionId}_${node.data.schemaName}_${name}`, isLeaf: true };
+        }));
       }
-    } catch (error) {}
-    return resolve([]);
+    } catch(e) { return resolve([]); }
   }
   return resolve([]);
 };
+
+const handleNodeClick = (data) => {
+  if (data.connectionId || data.id) activeConnection.value = getConnectionById(data.connectionId || data.id);
+  if (data.type === 'schema') {
+    activeSchema.value = data.schemaName;
+    activeTable.value = '';
+  } else if (data.type === 'table') {
+    activeSchema.value = data.schemaName;
+    activeTable.value = data.tableName;
+    const id = `table_${data.connectionId}_${data.schemaName}_${data.tableName}`;
+    if (!openTabs.value.find(t => t.id === id)) {
+      const tab = { id, type: 'table', title: data.tableName, connectionId: data.connectionId, schema: data.schemaName, table: data.tableName, loading: true, result: { rows: [], fields: [] }, currentPage: 1, pageSize: 50, total: 0 };
+      openTabs.value.push(tab);
+      loadTableData(tab);
+    }
+    activeTab.value = id;
+  }
+};
+
+const openCreateDialog = () => { isEditMode.value = false; currentEditData.value = null; showConnectDialog.value = true; };
+const openEditDialog = (data) => { isEditMode.value = true; currentEditData.value = { ...data }; showConnectDialog.value = true; };
+
+const saveConnection = async (connection) => {
+  try {
+    let result;
+    if (isEditMode.value && currentEditData.value) {
+      connection.id = currentEditData.value.id;
+      if (window.electronAPI.disconnectDb) await window.electronAPI.disconnectDb(connection.id);
+      result = await window.electronAPI.updateDbConnection(JSON.parse(JSON.stringify(connection)));
+    } else {
+      connection.id = Date.now().toString();
+      result = await window.electronAPI.saveDbConnection(JSON.parse(JSON.stringify(connection)));
+    }
+    if (!result.success) throw new Error(result.error);
+    ElMessage.success(isEditMode.value ? '修改成功' : '保存成功');
+    showConnectDialog.value = false;
+    loadConnections(); 
+  } catch (err) { ElMessage.error(err.message); }
+};
+
+const deleteConnection = async (data) => {
+  try {
+    await ElMessageBox.confirm(`确定删除 "${data.name}" 吗？`, '警告', { type: 'warning' });
+    const res = await window.electronAPI.deleteDbConnection(data.id);
+    if (res.success) {
+      ElMessage.success('删除成功');
+      openTabs.value = openTabs.value.filter(t => t.connectionId !== data.id);
+      if (!openTabs.value.find(t => t.id === activeTab.value)) activeTab.value = openTabs.value[0]?.id || '';
+      loadConnections();
+    } else throw new Error(res.error);
+  } catch(e) { if(e !== 'cancel') ElMessage.error(e.message); }
+};
+
+const testConnection = async (config) => {
+  loading.value = true;
+  try {
+    const res = await window.electronAPI.testDbConnection(JSON.parse(JSON.stringify(config)));
+    if (res.success) ElMessage.success('连接测试成功');
+    else throw new Error(res.error);
+  } catch(e) { ElMessage.error(`测试失败: ${e.message}`); } finally { loading.value = false; }
+};
+
+// ================= 2. 数据查询与操作逻辑 =================
 
 const loadTableData = async (tab) => {
   tab.loading = true;
@@ -414,53 +528,35 @@ const loadTableData = async (tab) => {
   try {
     const conn = getConnectionById(tab.connectionId);
     const offset = (tab.currentPage - 1) * tab.pageSize;
-
-    let sql = conn.dbType === 'mysql'
+    const sql = conn.dbType === 'mysql'
       ? `SELECT * FROM \`${tab.schema}\`.\`${tab.table}\` LIMIT ${tab.pageSize} OFFSET ${offset}`
       : `SELECT * FROM "${tab.schema}"."${tab.table}" LIMIT ${tab.pageSize} OFFSET ${offset}`;
     
-    const result = await window.electronAPI.executeSql({ connectionId: tab.connectionId, sql: sql });
-    
-    if (!result.success) { 
-      tab.error = result.error; 
-      tab.loading = false;
-      return; 
+    const result = await window.electronAPI.executeSql({ connectionId: tab.connectionId, sql });
+    if (result.success) {
+      tab.result = result.data || { rows: [], fields: [] };
+    } else {
+      tab.error = result.error;
     }
-    
-    tab.result = result.data || { rows: [], fields: [] };
-    tab.loading = false; 
 
-    let countSql = conn.dbType === 'mysql'
+    const countSql = conn.dbType === 'mysql'
       ? `SELECT COUNT(*) as total FROM \`${tab.schema}\`.\`${tab.table}\``
       : `SELECT COUNT(*) as total FROM "${tab.schema}"."${tab.table}"`;
-      
-    window.electronAPI.executeSql({ connectionId: tab.connectionId, sql: countSql })
-      .then(countResult => {
-        if (countResult.success && countResult.data.rows.length > 0) {
-          tab.total = Number(countResult.data.rows[0].total || countResult.data.rows[0].TOTAL || Object.values(countResult.data.rows[0])[0] || 0);
-        }
-      }).catch(err => console.warn('后台获取总数失败', err));
+    window.electronAPI.executeSql({ connectionId: tab.connectionId, sql: countSql }).then(cRes => {
+      if (cRes.success && cRes.data.rows.length > 0) tab.total = Number(cRes.data.rows[0].total || cRes.data.rows[0].TOTAL || Object.values(cRes.data.rows[0])[0] || 0);
+    }).catch(()=>{});
 
-  } catch (e) { 
-    tab.error = e.message; 
-    tab.loading = false; 
-  }
+  } catch (e) { tab.error = e.message; } finally { tab.loading = false; }
 };
 
 const handleTableEdits = async (tab, edits) => {
+  tab.loading = true;
   try {
-    tab.loading = true;
     const conn = getConnectionById(tab.connectionId);
-    
-    const colRes = await window.electronAPI.getTableColumns({
-      connectionId: tab.connectionId, schema: tab.schema, table: tab.table
-    });
+    const colRes = await window.electronAPI.getTableColumns({ connectionId: tab.connectionId, schema: tab.schema, table: tab.table });
     if (!colRes.success) throw new Error(colRes.error);
-
     const pkCols = colRes.data.filter(c => c.primaryKey).map(c => c.name);
-    if (pkCols.length === 0) {
-      throw new Error(`【安全拦截】表 "${tab.table}" 没有主键！禁止使用内联编辑，防止导致整表被误覆盖。`);
-    }
+    if (pkCols.length === 0) throw new Error(`表没有主键，禁止编辑。`);
 
     for (const edit of edits) {
       const { originalRow, updates } = edit;
@@ -470,72 +566,54 @@ const handleTableEdits = async (tab, edits) => {
         const safeCol = conn.dbType === 'mysql' ? `\`${col}\`` : `"${col}"`;
         setClauses.push(`${safeCol} = ${safeVal}`);
       }
-
       const whereClauses = [];
       for (const pk of pkCols) {
-        const pkVal = originalRow[pk];
-        if (pkVal === undefined || pkVal === null) throw new Error(`主键 "${pk}" 的值为空，无法准确定位更新行！`);
-        const safePkVal = `'${String(pkVal).replace(/'/g, "''")}'`;
+        const safePkVal = `'${String(originalRow[pk]).replace(/'/g, "''")}'`;
         const safePk = conn.dbType === 'mysql' ? `\`${pk}\`` : `"${pk}"`;
         whereClauses.push(`${safePk} = ${safePkVal}`);
       }
-
       const tableName = conn.dbType === 'mysql' ? `\`${tab.schema}\`.\`${tab.table}\`` : `"${tab.schema}"."${tab.table}"`;
       const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')}`;
-
-      const execRes = await window.electronAPI.executeSql({
-        connectionId: tab.connectionId,
-        schema: tab.schema,
-        sql: sql
-      });
-      
-      if (!execRes.success) throw new Error(`数据更新失败: ${execRes.error}`);
+      const res = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql });
+      if (!res.success) throw new Error(`更新失败: ${res.error}`);
     }
-
-    ElMessage.success('🎉 修改已成功保存到数据库！');
+    ElMessage.success('修改成功');
     await loadTableData(tab); 
-  } catch (err) {
-    ElMessage.error(err.message);
-  } finally {
-    tab.loading = false;
-  }
+  } catch (err) { ElMessage.error(err.message); } finally { tab.loading = false; }
 };
 
-const handleNodeClick = (data) => {
-  if (data.connectionId || data.id) activeConnection.value = getConnectionById(data.connectionId || data.id);
-  if (data.type === 'schema') { activeSchema.value = data.schemaName; activeTable.value = ''; } 
-  else if (data.type === 'table') {
-    activeSchema.value = data.schemaName; activeTable.value = data.tableName;
-    const tabId = `table_${data.connectionId}_${data.schemaName}_${data.tableName}`;
-    if (openTabs.value.find(t => t.id === tabId)) { 
-      activeTab.value = tabId; 
-    } 
-    else {
-      const newTab = { 
-        id: tabId, type: 'table', title: `${data.tableName}`, connectionId: data.connectionId, 
-        schema: data.schemaName, table: data.tableName, loading: true, error: '', 
-        result: { rows: [], fields: [] }, currentPage: 1, pageSize: 50, total: 0 
-      };
-      openTabs.value.push(newTab); 
-      activeTab.value = tabId; 
-      
-      setTimeout(() => {
-        loadTableData(newTab);
-      }, 50);
-    }
-  }
+const nextQueryIndex = ref(1);
+const addQueryTab = () => {
+  if (!activeConnection.value) return;
+  const id = `query-${Date.now()}`;
+  const newTab = {
+    id, type: 'query', title: `查询 ${nextQueryIndex.value++}`,
+    connectionId: activeConnection.value.id, schema: activeSchema.value || '', 
+    schemaList: [], hintTables: {}, sql: '', loading: false, error: '', result: null,
+    showBottomPanel: true, editorHeight: 60, bottomTab: 'result', history: []
+  };
+  openTabs.value.push(newTab); activeTab.value = id;
+  refreshSchemaList(newTab).then(() => {
+    newTab.schema = activeSchema.value || '';
+    if(newTab.schema) fetchAutoCompletionData(newTab); 
+  });
+};
+
+const removeTab = (id) => {
+  const idx = openTabs.value.findIndex(t => t.id === id);
+  openTabs.value.splice(idx, 1);
+  if (activeTab.value === id) activeTab.value = openTabs.value[idx]?.id || openTabs.value[idx-1]?.id || '';
 };
 
 const handleTabChange = (tabId) => {
   const tab = openTabs.value.find(t => t.id === tabId);
   if (tab) {
     activeConnection.value = getConnectionById(tab.connectionId);
-    if (tab.type === 'table') { activeSchema.value = tab.schema; activeTable.value = tab.table; } 
+    if (tab.type === 'table') { activeSchema.value = tab.schema; activeTable.value = tab.table; }
     else { activeSchema.value = tab.schema || ''; activeTable.value = ''; }
   }
 };
 
-const nextQueryIndex = ref(1);
 const fetchAutoCompletionData = async (tab) => {
   if (!tab.connectionId || !tab.schema) { tab.hintTables = {}; return; }
   try {
@@ -548,7 +626,7 @@ const fetchAutoCompletionData = async (tab) => {
   } catch(e) {}
 };
 
-const onQuerySchemaChange = (tab) => { fetchAutoCompletionData(tab); };
+const onQuerySchemaChange = (tab) => fetchAutoCompletionData(tab);
 const refreshSchemaList = async (tab) => {
   if (!tab.connectionId) return;
   try {
@@ -557,361 +635,204 @@ const refreshSchemaList = async (tab) => {
       tab.schemaList = res.data;
       if (tab.schema && !tab.schemaList.includes(tab.schema)) tab.schema = '';
     }
-  } catch (e) {}
+  } catch(e) {}
 };
-
 const onQueryConnectionChange = async (tab) => {
   tab.schema = ''; tab.schemaList = []; tab.hintTables = {}; 
   await refreshSchemaList(tab);
 };
 
-const addQueryTab = () => {
-  if (!activeConnection.value) return;
-  const id = `query-${Date.now()}`;
-  const newTab = {
-    id, type: 'query', title: `查询${nextQueryIndex.value++}`,
-    connectionId: activeConnection.value.id, schema: activeSchema.value || '', 
-    schemaList: [], hintTables: {}, sql: '', loading: false, error: '', result: null,
-    showBottomPanel: true, editorHeight: 60, bottomTab: 'result', history: []
-  };
-  openTabs.value.push(newTab); activeTab.value = id;
-  refreshSchemaList(newTab).then(() => {
-    newTab.schema = activeSchema.value || '';
-    if(newTab.schema) fetchAutoCompletionData(newTab); 
-  });
-};
-
-const removeTab = (targetId) => {
-  const idx = openTabs.value.findIndex(t => t.id === targetId);
-  if (idx === -1) return;
-  const wasActive = activeTab.value === targetId;
-  openTabs.value.splice(idx, 1);
-  if (wasActive) {
-    const next = openTabs.value[idx] || openTabs.value[idx - 1];
-    if (next) { activeTab.value = next.id; handleTabChange(next.id); } 
-    else { activeTab.value = ''; activeTable.value = ''; }
-  }
-};
-
 const executeSqlForTab = async (tab) => {
   const editorRef = editorRefs[tab.id]; 
-  const sql = editorRef && typeof editorRef.getSelectionOrAll === 'function' 
-    ? editorRef.getSelectionOrAll().trim() 
-    : (tab.sql || '').trim();
-  
-  if (!sql) return ElMessage.warning('请输入或选中要执行的 SQL 语句');
-  if (!tab.connectionId) return ElMessage.warning('请选择数据库连接');
+  const sql = editorRef ? editorRef.getSelectionOrAll().trim() : (tab.sql || '').trim();
+  if (!sql) return ElMessage.warning('请输入 SQL');
   
   const startTime = Date.now();
-  tab.loading = true; 
-  tab.error = ''; 
-  tab.result = null;
-  tab.showBottomPanel = true; 
-  
+  tab.loading = true; tab.showBottomPanel = true; tab.error = '';
   try {
-    const result = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql });
+    const res = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql });
     const duration = Date.now() - startTime;
-    
-    if (!result.success) { 
-      tab.error = result.error; 
-      tab.bottomTab = 'message';
-      tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '失败' });
-      return; 
-    }
-    
-    tab.result = result.data || {};
-    tab.bottomTab = tab.result.isQuery ? 'result' : 'message'; 
-    tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '成功' });
-  } catch (e) { 
-    const duration = Date.now() - startTime;
-    tab.error = e.message; 
-    tab.bottomTab = 'message';
-    tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '失败' });
-  } finally { 
-    tab.loading = false; 
-  }
-};
-
-// ================= 【新增】：处理 AI 慢查询诊断逻辑 =================
-const handleAiDiagnosis = async (tab) => {
-  const editorRef = editorRefs[tab.id]; 
-  const sql = editorRef && typeof editorRef.getSelectionOrAll === 'function'
-    ? editorRef.getSelectionOrAll().trim() 
-    : (tab.sql || '').trim();
-  
-  if (!sql) return ElMessage.warning('请输入或选中要诊断的 SQL 语句');
-  if (!tab.connectionId) return ElMessage.warning('请选择数据库连接');
-
-  showAiAnalysisDialog.value = true;
-  analysisLoading.value = true;
-  aiAnalysisResult.value = '';
-
-  try {
-    // 1. 获取执行计划 (EXPLAIN)
-    const explainSql = `EXPLAIN ${sql}`;
-    const explainRes = await window.electronAPI.executeSql({ 
-      connectionId: tab.connectionId, 
-      schema: tab.schema, 
-      sql: explainSql 
-    });
-    
-    if (!explainRes.success) throw new Error('获取执行计划失败: ' + explainRes.error);
-    const explainPlan = JSON.stringify(explainRes.data.rows, null, 2);
-
-    // 2. 获取表结构
-    const tableMatch = sql.match(/FROM\s+["`]?(\w+)["`]?/i);
-    let columns = [];
-    if (tableMatch) {
-      const colRes = await window.electronAPI.getTableColumns({
-        connectionId: tab.connectionId,
-        schema: tab.schema,
-        table: tableMatch[1]
-      });
-      if (colRes.success) columns = colRes.data;
-    }
-
-    // 3. 调用 AI 诊断接口
-    const res = await window.electronAPI.analyzeQuery({
-      sql,
-      explainPlan,
-      columns
-    });
-
     if (res.success) {
-      aiAnalysisResult.value = res.analysis;
+      tab.result = res.data;
+      tab.bottomTab = tab.result.isQuery ? 'result' : 'message';
+      tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '成功' });
     } else {
-      throw new Error(res.error);
+      tab.error = res.error; tab.bottomTab = 'message';
+      tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '失败' });
     }
-  } catch (err) {
-    if (err.message.includes('未配置') || err.message.includes('API key')) {
-      ElMessageBox.confirm('您尚未配置 AI API Key。是否前往配置？', '提示', { type: 'warning' })
-        .then(() => openAiConfigDialog());
-      showAiAnalysisDialog.value = false;
-    } else {
-      ElMessage.error('诊断失败: ' + err.message);
-      showAiAnalysisDialog.value = false;
-    }
-  } finally {
-    analysisLoading.value = false;
-  }
+  } catch(e) { 
+    tab.error = e.message; tab.bottomTab = 'message';
+    tab.history.unshift({ time: new Date().toLocaleString(), sql, duration: Date.now()-startTime, status: '失败' });
+  } finally { tab.loading = false; }
 };
 
-// ================= 拖拽分屏逻辑 =================
 const startDrag = (e, tab) => {
   e.preventDefault();
   const startY = e.clientY;
   const startHeight = tab.editorHeight;
   const container = e.target.parentElement;
   const containerHeight = container.clientHeight;
-
   const onMouseMove = (moveEvent) => {
-    const dy = moveEvent.clientY - startY;
-    const percentageChange = (dy / containerHeight) * 100;
-    let newHeight = startHeight + percentageChange;
+    let newHeight = startHeight + ((moveEvent.clientY - startY) / containerHeight) * 100;
     if (newHeight < 15) newHeight = 15;
     if (newHeight > 85) newHeight = 85;
     tab.editorHeight = newHeight;
   };
-  const onMouseUp = () => {
-    document.removeEventListener('mousemove', onMouseMove);
-    document.removeEventListener('mouseup', onMouseUp);
-  };
-  document.addEventListener('mousemove', onMouseMove);
-  document.addEventListener('mouseup', onMouseUp);
+  const onMouseUp = () => { document.removeEventListener('mousemove', onMouseMove); document.removeEventListener('mouseup', onMouseUp); };
+  document.addEventListener('mousemove', onMouseMove); document.addEventListener('mouseup', onMouseUp);
 };
 
-// ================= 连接管理弹窗 =================
-const openCreateDialog = () => { isEditMode.value = false; currentEditData.value = null; showConnectDialog.value = true; };
-const openEditDialog = (data) => { isEditMode.value = true; currentEditData.value = { ...data }; showConnectDialog.value = true; };
-
-const saveConnection = async (connection) => {
-  try {
-    if (isEditMode.value && currentEditData.value) {
-      connection.id = currentEditData.value.id;
-      if (window.electronAPI.disconnectDb) await window.electronAPI.disconnectDb(connection.id);
-      const result = await window.electronAPI.updateDbConnection(JSON.parse(JSON.stringify(connection)));
-      if (!result.success) return ElMessage.error(`保存失败: ${result.error}`);
-    } else {
-      connection.id = Date.now().toString();
-      const result = await window.electronAPI.saveDbConnection(JSON.parse(JSON.stringify(connection)));
-      if (!result.success) return ElMessage.error(`保存失败: ${result.error}`);
-    }
-    ElMessage.success(isEditMode.value ? '连接修改成功！' : '连接保存成功！');
-    showConnectDialog.value = false; await loadConnections(); 
-  } catch (error) { ElMessage.error(`保存异常: ${error.message}`); }
-};
-
-const deleteConnection = async (data) => {
-  try {
-    await ElMessageBox.confirm(`确定要删除 "${data.name}" 吗？`, '警告', { type: 'warning' });
-    const result = await window.electronAPI.deleteDbConnection(data.id);
-    if (result.success) {
-      ElMessage.success('删除成功！');
-      openTabs.value = openTabs.value.filter(t => t.connectionId !== data.id);
-      if (!openTabs.value.find(t => t.id === activeTab.value)) activeTab.value = openTabs.value.length > 0 ? openTabs.value[openTabs.value.length-1].id : '';
-      await loadConnections();
-    } else { ElMessage.error(`删除失败: ${result.error}`); }
-  } catch (e) {}
-};
-
-const testConnection = async (config) => {
-  try {
-    loading.value = true;
-    const result = await window.electronAPI.testDbConnection(JSON.parse(JSON.stringify(config)));
-    if (result.success) ElMessage.success('连接测试成功！');
-    else ElMessage.error(`连接测试失败: ${result.error}`);
-  } catch (error) { ElMessage.error(`测试失败: ${error.message}`); } finally { loading.value = false; }
-};
-
-// ================= AI 助手逻辑 =================
-const showAiConfigDialog = ref(false);
-const aiConfig = reactive({ provider: 'openai', apiKey: '', baseUrl: '', model: '' });
+// ================= 3. AI 核心能力逻辑 =================
 
 const openAiConfigDialog = async () => {
   try {
-    if (window.electronAPI && window.electronAPI.getAiConfig) {
-      const config = await window.electronAPI.getAiConfig();
-      if (config) Object.assign(aiConfig, config);
-    }
+    const config = await window.electronAPI.getAiConfig();
+    if (config) Object.assign(aiConfig, config);
     showAiConfigDialog.value = true;
-  } catch (err) { ElMessage.error("获取 AI 配置失败"); }
+  } catch(e) { ElMessage.error("获取 AI 配置失败"); }
 };
 
 const saveAiConfig = async () => {
-  if (!aiConfig.apiKey) return ElMessage.warning('API Key 不能为空！');
+  if (!aiConfig.apiKey) return ElMessage.warning('API Key 不能为空');
   try {
     const res = await window.electronAPI.saveAiConfig(JSON.parse(JSON.stringify(aiConfig)));
-    if (res.success) {
-      ElMessage.success('AI 配置保存成功！');
-      showAiConfigDialog.value = false;
-    } else { ElMessage.error('保存失败: ' + res.error); }
-  } catch (err) { ElMessage.error(err.message); }
+    if (res.success) { ElMessage.success('保存成功'); showAiConfigDialog.value = false; }
+    else throw new Error(res.error);
+  } catch(e) { ElMessage.error(e.message); }
 };
 
+// 【AI 功能1】：智能生成 SQL (Chat)
 const generateSqlWithAi = async () => {
   if (!aiPromptInput.value.trim()) return;
   const currentTab = openTabs.value.find(t => t.id === activeTab.value);
-  if (!currentTab || currentTab.type !== 'query') {
-    return ElMessage.warning('请先在左侧打开或新建一个查询窗口');
-  }
+  if (!currentTab || currentTab.type !== 'query') return ElMessage.warning('请先打开查询窗口');
   
   const userText = aiPromptInput.value;
   aiChatHistory.value.push({ role: 'user', content: userText });
-  aiPromptInput.value = '';
-  aiGenerating.value = true;
-  
+  aiPromptInput.value = ''; aiGenerating.value = true;
   try {
-    const res = await window.electronAPI.generateSql({
-      prompt: userText,
-      connectionId: currentTab.connectionId,
-      schema: currentTab.schema
-    });
-
+    const res = await window.electronAPI.generateSql({ prompt: userText, connectionId: currentTab.connectionId, schema: currentTab.schema });
     if (res.success && res.sql) {
-      aiChatHistory.value.push({ 
-        role: 'ai', 
-        content: `这是为您生成的 SQL 语句：\n\n${res.sql}`,
-        sql: res.sql 
-      });
-      // 滚动到底部
-      nextTick(() => {
-        const container = document.querySelector('.custom-scrollbar');
-        if(container) container.scrollTop = container.scrollHeight;
-      });
-    } else {
-      throw new Error(res.error || '大模型返回为空');
-    }
+      aiChatHistory.value.push({ role: 'ai', content: `为您生成的 SQL：\n\n${res.sql}`, sql: res.sql });
+      nextTick(() => { const c = document.getElementById('chat-container'); if(c) c.scrollTop = c.scrollHeight; });
+    } else throw new Error(res.error);
   } catch (err) {
-    if (err.message.includes('未配置') || err.message.includes('API key')) {
-      ElMessageBox.confirm('您尚未配置 AI API Key，或者 Key 无效。是否立即前往配置？', '提示', { type: 'warning' })
-        .then(() => openAiConfigDialog());
-    } else {
-      aiChatHistory.value.push({ role: 'ai', content: `生成失败: ${err.message}` });
-    }
-  } finally {
-    aiGenerating.value = false;
+    if (err.message.includes('未配置')) {
+      ElMessageBox.confirm('您尚未配置 AI API Key。', '提示', { type: 'warning' }).then(() => openAiConfigDialog());
+    } else { aiChatHistory.value.push({ role: 'ai', content: `生成失败: ${err.message}` }); }
+  } finally { aiGenerating.value = false; }
+};
+
+const insertSqlToEditor = (sql) => {
+  const tab = openTabs.value.find(t => t.id === activeTab.value);
+  if (tab && editorRefs[tab.id]) {
+    const editor = editorRefs[tab.id];
+    editor.setSql((editor.getSelectionOrAll() || '') + `\n-- AI:\n${sql}\n`);
+    ElMessage.success('插入成功');
   }
 };
 
-const insertSqlToEditor = (sqlToInsert) => {
-  const currentTab = openTabs.value.find(t => t.id === activeTab.value);
-  if (currentTab) {
-    const editorRef = editorRefs[currentTab.id];
-    if (editorRef && typeof editorRef.setSql === 'function') {
-      const currentSql = typeof editorRef.getSelectionOrAll === 'function' ? editorRef.getSelectionOrAll() : '';
-      editorRef.setSql(currentSql + `\n-- AI 自动生成:\n${sqlToInsert}\n`);
-    } else {
-      currentTab.sql += `\n-- AI 自动生成:\n${sqlToInsert}\n`;
+// 【AI 功能2】：慢查询诊断
+const handleAiDiagnosis = async (tab) => {
+  const editor = editorRefs[tab.id]; 
+  const sql = editor ? editor.getSelectionOrAll().trim() : tab.sql.trim();
+  if (!sql) return ElMessage.warning('无可用 SQL');
+
+  showAiAnalysisDialog.value = true; analysisLoading.value = true; aiAnalysisResult.value = '';
+  try {
+    const explainRes = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql: `EXPLAIN ${sql}` });
+    if (!explainRes.success) throw new Error(explainRes.error);
+    
+    let columns = [];
+    const tbMatch = sql.match(/FROM\s+["`]?(\w+)["`]?/i);
+    if (tbMatch) {
+      const colRes = await window.electronAPI.getTableColumns({ connectionId: tab.connectionId, schema: tab.schema, table: tbMatch[1] });
+      if (colRes.success) columns = colRes.data;
     }
-    ElMessage.success('已插入到编辑器');
+    const res = await window.electronAPI.analyzeQuery({ sql, explainPlan: JSON.stringify(explainRes.data.rows), columns });
+    if (res.success) aiAnalysisResult.value = res.analysis; else throw new Error(res.error);
+  } catch (err) {
+    if(err.message.includes('未配置')) ElMessageBox.confirm('去配置 Key？', '提示').then(openAiConfigDialog);
+    else ElMessage.error('诊断失败: ' + err.message);
+    showAiAnalysisDialog.value = false;
+  } finally { analysisLoading.value = false; }
+};
+
+// 【AI 功能3】：智能数据模拟
+const openMockDataDialog = (tab) => { mockTargetTab.value = tab; mockForm.count = 20; showMockDialog.value = true; };
+const executeMockDataGeneration = async () => {
+  mockGenerating.value = true;
+  try {
+    const tab = mockTargetTab.value;
+    const colRes = await window.electronAPI.getTableColumns({ connectionId: tab.connectionId, schema: tab.schema, table: tab.table });
+    const aiRes = await window.electronAPI.generateMockData({ tableName: tab.table, columns: colRes.data, count: mockForm.count, instruction: mockForm.instruction });
+    if (!aiRes.success) throw new Error(aiRes.error);
+    const execRes = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql: aiRes.sql });
+    if (!execRes.success) throw new Error(execRes.error);
+    ElMessage.success('生成入库成功');
+    showMockDialog.value = false;
+    loadTableData(tab);
+  } catch (err) {
+    if(err.message.includes('未配置')) openAiConfigDialog();
+    else ElMessage.error(err.message);
+  } finally { mockGenerating.value = false; }
+};
+
+// 【AI 功能4】：自动化数据洞察 (生成可视化图表)
+const generateInsightFromCurrentTab = async () => {
+  const tab = openTabs.value.find(t => t.id === activeTab.value);
+  if (!tab || !tab.result || !tab.result.rows || tab.result.rows.length === 0) return ElMessage.warning('请先执行查询并获取结果。');
+
+  insightLoading.value = true;
+  try {
+    // ✅ 修复：处理 Vue Proxy 拦截器 和 BigInt 序列化崩溃的问题
+    const pureRows = JSON.parse(JSON.stringify(tab.result.rows, (key, value) => {
+      return typeof value === 'bigint' ? value.toString() : value;
+    }));
+    
+    // 把纯净、安全的数据发给后端 AI
+    const res = await window.electronAPI.generateInsight(pureRows);
+    
+    if (!res.success) throw new Error(res.error);
+
+    const insightId = `insight-${Date.now()}`;
+    openTabs.value.push({
+      id: insightId, type: 'insight', title: `洞察: ${tab.title}`,
+      analysis: res.analysis, option: res.chartOption, originalRows: tab.result.rows
+    });
+    activeTab.value = insightId;
+
+    nextTick(() => {
+      const chartDom = document.getElementById('chart-' + insightId);
+      if (chartDom) {
+        const myChart = echarts.init(chartDom);
+        myChart.setOption(res.chartOption);
+        window.addEventListener('resize', () => myChart.resize());
+      }
+    });
+  } catch (err) {
+    if(err.message.includes('未配置')) openAiConfigDialog();
+    else ElMessage.error('洞察失败: ' + err.message);
+  } finally { 
+    insightLoading.value = false; 
   }
 };
 </script>
 
 <style scoped>
-/* 覆盖 Element Plus 树形控件样式，使其更现代 */
-:deep(.modern-tree) {
-  background: transparent;
-  --el-tree-node-hover-bg-color: #f1f5f9;
-}
-:deep(.modern-tree .el-tree-node__content) {
-  height: 32px;
-  border-radius: 6px;
-  margin-bottom: 2px;
-}
-
-/* 覆盖 Tabs 样式 */
-:deep(.modern-tabs > .el-tabs__header) {
-  margin: 0;
-  border-bottom: 1px solid #e2e8f0;
-  background-color: #f8fafc;
-}
-:deep(.modern-tabs > .el-tabs__header .el-tabs__nav) {
-  border: none !important;
-}
-:deep(.modern-tabs > .el-tabs__header .el-tabs__item) {
-  border: 1px solid transparent !important;
-  border-right: 1px solid #e2e8f0 !important;
-  background-color: #f1f5f9;
-  color: #64748b;
-  font-size: 13px;
-  height: 36px;
-  line-height: 36px;
-}
-:deep(.modern-tabs > .el-tabs__header .el-tabs__item.is-active) {
-  background-color: #ffffff;
-  border-top: 2px solid #3b82f6 !important;
-  color: #0f172a;
-  border-bottom-color: #ffffff !important;
-}
-:deep(.modern-tabs > .el-tabs__content) {
-  flex: 1;
-  overflow: hidden;
-}
-
-/* 拖拽条 */
-.resizer { 
-  height: 4px; 
-  background-color: #f1f5f9; 
-  cursor: row-resize; 
-  border-top: 1px solid #e2e8f0; 
-  border-bottom: 1px solid #e2e8f0; 
-  transition: background 0.2s;
-}
-.resizer:hover, .resizer:active { 
-  background-color: #3b82f6; 
-}
-
-/* 滚动条美化 */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: #cbd5e1;
-  border-radius: 3px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background-color: transparent;
-}
+/* 滚动条 */
+.custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+/* 树 */
+:deep(.modern-tree) { background: transparent; --el-tree-node-hover-bg-color: #f1f5f9; }
+:deep(.modern-tree .el-tree-node__content) { height: 32px; border-radius: 6px; margin-bottom: 2px; }
+/* Tabs */
+:deep(.modern-tabs > .el-tabs__header) { margin: 0; border-bottom: 1px solid #e2e8f0; background-color: #f8fafc; }
+:deep(.modern-tabs > .el-tabs__header .el-tabs__nav) { border: none !important; }
+:deep(.modern-tabs > .el-tabs__header .el-tabs__item) { border: 1px solid transparent !important; border-right: 1px solid #e2e8f0 !important; background-color: #f1f5f9; color: #64748b; height: 36px; line-height: 36px; }
+:deep(.modern-tabs > .el-tabs__header .el-tabs__item.is-active) { background-color: #ffffff; border-top: 2px solid #3b82f6 !important; color: #0f172a; border-bottom-color: #ffffff !important; }
+:deep(.modern-tabs > .el-tabs__content) { flex: 1; overflow: hidden; }
+/* Resizer */
+.resizer { height: 4px; background: #f1f5f9; cursor: row-resize; border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; transition: background 0.2s; }
+.resizer:hover, .resizer:active { background: #3b82f6; }
 </style>
