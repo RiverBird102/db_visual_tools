@@ -1,86 +1,79 @@
 <template>
-  <el-container class="app-root">
-    <el-aside width="320px" class="left">
-      <div class="sidebar">
-        <div class="sidebar-header">
-          <el-button type="primary" @click="openCreateDialog" class="header-btn">新建连接</el-button>
-          <el-button 
-            type="success" 
-            plain 
-            @click="addQueryTab" 
-            :disabled="!activeConnection" 
-            class="header-btn"
-          >
-            新建查询
-          </el-button>
-          <el-button 
-            @click="loadConnections" 
-            class="header-btn refresh-tree-btn" 
-            title="刷新数据库目录树"
-          >
-            🔄
-          </el-button>
+  <div class="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
+    
+    <aside class="w-72 flex flex-col bg-white border-r border-slate-200 shadow-sm z-10">
+      <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+        <h2 class="font-bold text-sm text-slate-700 tracking-tight">数据库资源</h2>
+        <div class="flex gap-1">
+          <button @click="openCreateDialog" class="p-1.5 hover:bg-blue-50 rounded text-blue-600 transition-colors" title="新建连接">
+            <Plus :size="16" />
+          </button>
+          <button @click="addQueryTab" :disabled="!activeConnection" class="p-1.5 hover:bg-green-50 rounded text-green-600 disabled:text-slate-300 transition-colors" title="新建查询">
+            <FileCode2 :size="16" />
+          </button>
+          <button @click="loadConnections" class="p-1.5 hover:bg-slate-200 rounded text-slate-600 transition-colors" title="刷新目录">
+            <RefreshCw :size="16" />
+          </button>
         </div>
       </div>
       
-      <el-tree
-        :key="treeRenderKey"
-        :props="treeProps"
-        :load="loadTreeNode"
-        lazy
-        node-key="treeId"
-        highlight-current
-        @node-click="handleNodeClick"
-        class="connection-tree"
-      >
-        <template #default="{ node, data }">
-          <div class="custom-tree-node">
-            <span class="node-label">
-              <span v-if="data.type === 'connection'">🔌</span>
-              <span v-else-if="data.type === 'schema'">🗃️</span>
-              <span v-else-if="data.type === 'table'">📄</span>
-              <span style="margin-left: 5px" :title="node.label">{{ node.label }}</span>
-            </span>
-            <span class="node-actions" @click.stop v-if="data.type === 'connection'">
-              <el-button link type="primary" size="small" @click.stop="openEditDialog(data)">编辑</el-button>
-              <el-button link type="danger" size="small" @click.stop="deleteConnection(data)">删除</el-button>
-            </span>
-          </div>
-        </template>
-      </el-tree>
-
-      <div class="sidebar-footer">
-        <el-button text @click="openAiConfigDialog" style="width: 100%;">⚙️ AI 助手设置</el-button>
+      <div class="flex-1 overflow-y-auto p-2 custom-scrollbar">
+        <el-tree
+          :key="treeRenderKey"
+          :props="treeProps"
+          :load="loadTreeNode"
+          lazy
+          node-key="treeId"
+          highlight-current
+          @node-click="handleNodeClick"
+          class="modern-tree"
+        >
+          <template #default="{ node, data }">
+            <div class="flex-1 flex items-center justify-between text-sm pr-2 overflow-hidden group">
+              <span class="flex items-center gap-2 truncate text-slate-700">
+                <Zap v-if="data.type === 'connection'" :size="14" class="text-amber-500" />
+                <Database v-else-if="data.type === 'schema'" :size="14" class="text-blue-500" />
+                <TableIcon v-else-if="data.type === 'table'" :size="14" class="text-slate-400" />
+                <span class="truncate" :title="node.label">{{ node.label }}</span>
+              </span>
+              <span class="hidden group-hover:flex items-center gap-1 shrink-0" @click.stop v-if="data.type === 'connection'">
+                <button @click.stop="openEditDialog(data)" class="text-blue-500 hover:text-blue-700 p-1"><Edit3 :size="12" /></button>
+                <button @click.stop="deleteConnection(data)" class="text-red-500 hover:text-red-700 p-1"><Trash2 :size="12" /></button>
+              </span>
+            </div>
+          </template>
+        </el-tree>
       </div>
 
-      <el-dialog :title="isEditMode ? '编辑数据库连接' : '新建数据库连接'" v-model="showConnectDialog" width="600px">
-        <db-connect 
-          :initial-data="currentEditData" 
-          @save="saveConnection" 
-          @test="testConnection"
-          @cancel="showConnectDialog = false" 
-        ></db-connect>
-      </el-dialog>
-    </el-aside>
+      <div class="p-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+        <button @click="openAiConfigDialog" class="flex items-center gap-2 text-xs text-slate-600 hover:text-blue-600 transition-colors">
+          <Settings :size="14" /> AI 助手设置
+        </button>
+      </div>
+    </aside>
     
-    <el-container class="right">
-      <el-header class="topbar">
-        <div class="topbar-left">
-          <el-tag v-if="activeConnection" type="info">{{ activeConnection.name }}</el-tag>
-          <span v-if="activeTable" class="crumb">{{ activeSchema }} / {{ activeTable }}</span>
+    <main class="flex-1 flex flex-col min-w-0 bg-white">
+      <header class="h-12 border-b border-slate-200 flex items-center px-4 justify-between bg-white shrink-0">
+        <div class="flex items-center gap-3">
+          <el-tag v-if="activeConnection" effect="plain" class="border-blue-200 text-blue-600 bg-blue-50">
+            <span class="flex items-center gap-1"><Zap :size="12"/> {{ activeConnection.name }}</span>
+          </el-tag>
+          <span v-if="activeTable" class="text-sm text-slate-500 flex items-center gap-1">
+            <Database :size="12"/> {{ activeSchema }} <span class="text-slate-300">/</span> <TableIcon :size="12"/> {{ activeTable }}
+          </span>
         </div>
-      </el-header>
+      </header>
 
-      <el-main class="main">
-        <div v-if="openTabs.length === 0" class="empty-workspace">
-          <el-empty description="请在左侧点击表名以查看数据，或新建查询开始工作" />
+      <div class="flex-1 flex flex-col overflow-hidden relative">
+        <div v-if="openTabs.length === 0" class="absolute inset-0 flex items-center justify-center bg-slate-50 z-10">
+          <el-empty description="在左侧点击表名查看数据，或新建查询" :image-size="120" />
         </div>
 
         <el-tabs 
           v-else 
           v-model="activeTab" 
           type="card" 
-          class="tabs" 
+          class="modern-tabs flex-1 flex flex-col" 
           @tab-remove="removeTab"
           @tab-change="handleTabChange"
         >
@@ -90,23 +83,24 @@
             :label="tab.title"
             :name="tab.id"
             closable
+            class="h-full flex flex-col"
           >
-            <div v-if="tab.type === 'table'" class="table-data-wrap">
-              <div class="table-data-toolbar">
-                <el-button type="primary" size="small" @click="loadTableData(tab)" :loading="tab.loading">刷新数据</el-button>
+            <div v-if="tab.type === 'table'" class="flex flex-col h-full p-2">
+              <div class="flex items-center gap-3 pb-2 border-b border-slate-100 mb-2">
+                <el-button type="primary" size="small" @click="loadTableData(tab)" :loading="tab.loading" class="shadow-sm">刷新数据</el-button>
                 <el-pagination
                   v-model:current-page="tab.currentPage"
                   v-model:page-size="tab.pageSize"
                   :page-sizes="[50, 100, 200, 500]"
-                  layout="total, sizes, prev, pager, next, jumper"
+                  layout="total, sizes, prev, pager, next"
                   :total="tab.total"
                   @size-change="loadTableData(tab)"
                   @current-change="loadTableData(tab)"
                   size="small"
-                  style="margin-left: auto;"
+                  class="ml-auto"
                 />
               </div>
-              <div class="table-data-content">
+              <div class="flex-1 min-h-0 border rounded border-slate-200 overflow-hidden">
                 <data-viewer
                   :data="tab.result.rows"
                   :columns="tab.result.fields"
@@ -118,42 +112,24 @@
               </div>
             </div>
 
-            <div v-else-if="tab.type === 'query'" class="query-wrap">
-              <div class="query-toolbar">
-                <el-select 
-                  v-model="tab.connectionId" 
-                  placeholder="选择连接" 
-                  size="small" 
-                  style="width: 160px;"
-                  @change="onQueryConnectionChange(tab)"
-                >
+            <div v-else-if="tab.type === 'query'" class="flex flex-col h-full p-2">
+              <div class="flex items-center gap-2 pb-2 mb-2">
+                <el-select v-model="tab.connectionId" placeholder="选择连接" size="small" class="w-40" @change="onQueryConnectionChange(tab)">
                   <el-option v-for="conn in allConnections" :key="conn.id" :label="conn.name" :value="conn.id" />
                 </el-select>
-                
-                <el-select 
-                  v-model="tab.schema" 
-                  placeholder="选择数据库" 
-                  size="small" 
-                  style="width: 160px;"
-                  @change="onQuerySchemaChange(tab)"
-                >
+                <el-select v-model="tab.schema" placeholder="选择数据库" size="small" class="w-40" @change="onQuerySchemaChange(tab)">
                   <el-option v-for="schema in tab.schemaList" :key="schema" :label="schema" :value="schema" />
                 </el-select>
+                <button @click="refreshSchemaList(tab)" class="p-1 hover:bg-slate-100 rounded text-slate-500"><RefreshCw :size="14"/></button>
                 
-                <el-button size="small" @click="refreshSchemaList(tab)" title="刷新数据库列表">🔄</el-button>
-                
-                <el-button type="primary" size="small" @click="executeSqlForTab(tab)" :loading="tab.loading" style="margin-left: 10px;">
-                  ▶ 执行 (选中/全部)
+                <el-button type="primary" size="small" @click="executeSqlForTab(tab)" :loading="tab.loading" class="ml-2 shadow-sm">
+                  <span class="flex items-center gap-1"><Play :size="12"/> 执行查询</span>
                 </el-button>
                 <el-button size="small" @click="tab.sql = ''">清空</el-button>
-
-                <el-button type="success" size="small" style="margin-left: auto;" @click="openAiPromptDialog(tab)">
-                  ✨ AI 智能生成 SQL
-                </el-button>
               </div>
 
-              <div class="split-pane" ref="splitPane">
-                <div class="query-editor-container" :style="{ height: tab.showBottomPanel ? tab.editorHeight + '%' : '100%' }">
+              <div class="flex-1 flex flex-col overflow-hidden border border-slate-200 rounded-lg shadow-sm">
+                <div class="relative" :style="{ height: tab.showBottomPanel ? tab.editorHeight + '%' : '100%' }">
                   <sql-editor 
                     :ref="el => setEditorRef(el, tab.id)"
                     v-model="tab.sql" 
@@ -165,35 +141,39 @@
 
                 <div class="resizer" v-if="tab.showBottomPanel" @mousedown="startDrag($event, tab)"></div>
 
-                <div class="query-bottom-panel" v-if="tab.showBottomPanel" :style="{ height: (100 - tab.editorHeight) + '%' }">
-                  <div class="bottom-panel-header">
-                    <div class="bottom-tabs">
-                      <span :class="{ active: tab.bottomTab === 'result' }" @click="tab.bottomTab = 'result'">结果集</span>
-                      <span :class="{ active: tab.bottomTab === 'message' }" @click="tab.bottomTab = 'message'">消息日志</span>
-                      <span :class="{ active: tab.bottomTab === 'history' }" @click="tab.bottomTab = 'history'">执行历史</span>
+                <div class="flex flex-col bg-white" v-if="tab.showBottomPanel" :style="{ height: (100 - tab.editorHeight) + '%' }">
+                  <div class="flex justify-between items-center border-b border-slate-200 bg-slate-50 px-2 h-9 shrink-0">
+                    <div class="flex space-x-1">
+                      <button v-for="bt in ['result', 'message', 'history']" :key="bt"
+                        @click="tab.bottomTab = bt"
+                        :class="tab.bottomTab === bt ? 'bg-white border-t-2 border-blue-500 text-blue-600 font-medium' : 'text-slate-500 hover:bg-slate-200'"
+                        class="px-4 py-1.5 text-xs transition-colors rounded-t-sm"
+                      >
+                        {{ bt === 'result' ? '结果集' : bt === 'message' ? '消息日志' : '执行历史' }}
+                      </button>
                     </div>
-                    <div class="bottom-actions">
-                      <el-button link size="small" @click="tab.showBottomPanel = false">🔽 关闭面板</el-button>
-                    </div>
+                    <button @click="tab.showBottomPanel = false" class="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1">
+                      <ChevronDown :size="14"/> 关闭
+                    </button>
                   </div>
                   
-                  <div class="bottom-panel-content">
-                    <div v-show="tab.bottomTab === 'result'" class="tab-content-inner">
+                  <div class="flex-1 overflow-hidden">
+                    <div v-show="tab.bottomTab === 'result'" class="h-full">
                       <data-viewer v-if="tab.result && tab.result.isQuery" :data="tab.result.rows" :columns="tab.result.fields" :loading="tab.loading"></data-viewer>
-                      <el-empty v-else description="无结果集返回" :image-size="60"></el-empty>
+                      <div v-else class="h-full flex items-center justify-center text-slate-400 text-sm">无结果集返回</div>
                     </div>
 
-                    <div v-show="tab.bottomTab === 'message'" class="tab-content-inner message-log">
-                      <div v-if="tab.error" class="error-text">❌ 错误: {{ tab.error }}</div>
-                      <div v-else-if="tab.result && tab.result.isQuery === false" class="success-text">
-                        ✅ {{ tab.result.message }} <span v-if="tab.result.affectedRows !== undefined"> (受影响的行数: {{ tab.result.affectedRows }})</span>
+                    <div v-show="tab.bottomTab === 'message'" class="h-full p-4 overflow-y-auto font-mono text-sm bg-slate-900 text-slate-300">
+                      <div v-if="tab.error" class="text-red-400">❌ Error: {{ tab.error }}</div>
+                      <div v-else-if="tab.result && tab.result.isQuery === false" class="text-green-400">
+                        ✅ {{ tab.result.message }} <span v-if="tab.result.affectedRows !== undefined"> (受影响行数: {{ tab.result.affectedRows }})</span>
                       </div>
-                      <div v-else-if="tab.result && tab.result.isQuery" class="success-text">✅ 查询执行成功，返回 {{ tab.result.rows.length }} 条记录。</div>
-                      <div v-else style="color: #999;">等待执行...</div>
+                      <div v-else-if="tab.result && tab.result.isQuery" class="text-green-400">✅ 查询执行成功，返回 {{ tab.result.rows.length }} 条记录。</div>
+                      <div v-else class="text-slate-500">等待执行...</div>
                     </div>
 
-                    <div v-show="tab.bottomTab === 'history'" class="tab-content-inner">
-                      <el-table :data="tab.history" size="small" border height="100%" style="width: 100%">
+                    <div v-show="tab.bottomTab === 'history'" class="h-full">
+                      <el-table :data="tab.history" size="small" border height="100%">
                         <el-table-column prop="time" label="执行时间" width="160"></el-table-column>
                         <el-table-column prop="sql" label="SQL语句" show-overflow-tooltip></el-table-column>
                         <el-table-column prop="duration" label="耗时(ms)" width="90"></el-table-column>
@@ -208,15 +188,80 @@
                 </div>
               </div>
 
-              <div v-if="!tab.showBottomPanel" class="restore-bar" @click="tab.showBottomPanel = true">
-                <span>⬆️ 展开结果面板</span>
+              <div v-if="!tab.showBottomPanel" class="text-center py-1 bg-slate-100 hover:bg-blue-50 cursor-pointer text-xs text-slate-500 hover:text-blue-600 mt-2 rounded border border-slate-200 transition-colors" @click="tab.showBottomPanel = true">
+                ⬆️ 展开结果面板
               </div>
             </div>
 
           </el-tab-pane>
         </el-tabs>
-      </el-main>
-    </el-container>
+      </div>
+    </main>
+
+    <aside class="w-80 flex flex-col bg-slate-50 border-l border-slate-200 shadow-sm z-10">
+      <div class="flex border-b border-slate-200 bg-white">
+        <button v-for="mode in ['chat', 'insight']" :key="mode"
+                @click="aiPanelTab = mode"
+                :class="aiPanelTab === mode ? 'text-blue-600 border-b-2 border-blue-600 font-bold bg-blue-50/30' : 'text-slate-500 hover:bg-slate-50'"
+                class="flex-1 py-3 text-sm transition-all flex items-center justify-center gap-2">
+          <Sparkles v-if="mode === 'chat'" :size="16" /> 
+          <BarChart2 v-else :size="16" />
+          {{ mode === 'chat' ? '智能生成' : '数据洞察' }}
+        </button>
+      </div>
+
+      <div v-show="aiPanelTab === 'chat'" class="flex-1 flex flex-col p-4 overflow-hidden">
+        <div class="flex-1 overflow-y-auto space-y-4 mb-4 pr-2 custom-scrollbar text-sm">
+          <div class="text-center text-xs text-slate-400 mb-4 bg-slate-200/50 py-1 rounded">
+            AI 会结合当前选中的数据库为您生成 SQL
+          </div>
+          
+          <div v-for="(msg, i) in aiChatHistory" :key="i" 
+               :class="msg.role === 'user' ? 'ml-8 items-end' : 'mr-8 items-start'"
+               class="flex flex-col">
+            <span class="text-[10px] text-slate-400 mb-1 px-1 flex items-center gap-1">
+              <User v-if="msg.role === 'user'" :size="10"/>
+              <Bot v-else :size="10" class="text-blue-500"/>
+              {{ msg.role === 'user' ? 'You' : 'AI Assistant' }}
+            </span>
+            <div :class="msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-700'"
+                 class="p-3 rounded-xl shadow-sm leading-relaxed whitespace-pre-wrap font-sans">
+              {{ msg.content }}
+            </div>
+            <button v-if="msg.role === 'ai' && msg.sql" @click="insertSqlToEditor(msg.sql)" class="mt-1 text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 px-1">
+              <ArrowLeftToLine :size="12"/> 插入到编辑器
+            </button>
+          </div>
+          
+          <div v-if="aiGenerating" class="flex gap-1 ml-2 mt-4">
+            <span class="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></span>
+            <span class="w-2 h-2 bg-blue-400 rounded-full animate-bounce delay-75"></span>
+            <span class="w-2 h-2 bg-blue-400 rounded-full animate-bounce delay-150"></span>
+          </div>
+        </div>
+
+        <div class="relative shrink-0">
+          <textarea v-model="aiPromptInput" 
+                    placeholder="描述你的查询需求..." 
+                    @keydown.ctrl.enter="generateSqlWithAi"
+                    class="w-full h-24 bg-white border border-slate-300 rounded-xl p-3 pr-10 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none shadow-sm resize-none transition-all"></textarea>
+          <button @click="generateSqlWithAi" :disabled="aiGenerating || !aiPromptInput.trim()"
+                  class="absolute bottom-3 right-3 text-white bg-blue-600 p-1.5 rounded-lg hover:bg-blue-700 disabled:bg-slate-300 transition-colors">
+            <Send :size="16" />
+          </button>
+        </div>
+      </div>
+
+      <div v-show="aiPanelTab === 'insight'" class="flex-1 p-4 overflow-y-auto flex flex-col items-center justify-center text-slate-400 text-sm">
+        <BarChart2 :size="48" class="mb-4 opacity-20" />
+        <p>执行查询后，</p>
+        <p>AI 将在此处自动生成图表分析</p>
+      </div>
+    </aside>
+
+    <el-dialog :title="isEditMode ? '编辑数据库连接' : '新建数据库连接'" v-model="showConnectDialog" width="600px" destroy-on-close>
+      <db-connect :initial-data="currentEditData" @save="saveConnection" @test="testConnection" @cancel="showConnectDialog = false"></db-connect>
+    </el-dialog>
 
     <el-dialog title="⚙️ AI 助手配置" v-model="showAiConfigDialog" width="500px">
       <el-form :model="aiConfig" label-width="100px">
@@ -232,7 +277,7 @@
         </el-form-item>
         <el-form-item label="Base URL">
           <el-input v-model="aiConfig.baseUrl" placeholder="默认: https://api.openai.com/v1" />
-          <div class="form-tip">如果你使用的是中转或国产大模型，请填入对应的 Base URL。</div>
+          <div class="text-xs text-slate-400 mt-1">如果你使用的是中转或国产大模型，请填入对应的 Base URL。</div>
         </el-form-item>
         <el-form-item label="模型名称">
           <el-input v-model="aiConfig.model" placeholder="如: gpt-3.5-turbo, deepseek-chat" />
@@ -246,39 +291,22 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showAiPromptDialog" title="✨ AI 智能生成 SQL" width="600px">
-      <el-alert
-        title="AI 会结合当前选择的数据库结构为您自动生成精准的 SQL 语句。"
-        type="info"
-        show-icon
-        :closable="false"
-        style="margin-bottom: 15px;"
-      />
-      <el-input
-        v-model="aiPromptInput"
-        type="textarea"
-        :rows="4"
-        placeholder="例如：查询所有年龄大于 20 岁并且在研发部的员工姓名，按照入职时间倒序排列..."
-      />
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="showAiPromptDialog = false" :disabled="aiGenerating">取 消</el-button>
-          <el-button type="primary" @click="generateSqlWithAi" :loading="aiGenerating">
-            {{ aiGenerating ? '生成中...' : '开始生成 SQL' }}
-          </el-button>
-        </span>
-      </template>
-    </el-dialog>
-
-  </el-container>
+  </div>
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue';
+import { ref, reactive, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import DbConnect from './components/DbConnect.vue';
 import SqlEditor from './components/SqlEditor.vue';
 import DataViewer from './components/DataViewer.vue';
+
+// 引入现代图标
+import { 
+  Plus, RefreshCw, Edit3, Trash2, Zap, Database, Table as TableIcon,
+  Play, Settings, Sparkles, MessageSquare, BarChart2, ChevronDown, 
+  Send, Bot, User, ArrowLeftToLine, FileCode2
+} from 'lucide-vue-next';
 
 // 基础状态
 const showConnectDialog = ref(false);
@@ -293,7 +321,13 @@ const activeTab = ref('');
 const treeRenderKey = ref(0); 
 const allConnections = ref([]); 
 
-// 存储各个 Editor 的实例，用于获取“选中的代码”
+// === AI 面板状态 ===
+const aiPanelTab = ref('chat');
+const aiChatHistory = ref([]);
+const aiPromptInput = ref('');
+const aiGenerating = ref(false);
+
+// 存储各个 Editor 的实例
 const editorRefs = ref({});
 const setEditorRef = (el, id) => {
   if (el) editorRefs.value[id] = el;
@@ -452,7 +486,7 @@ const handleNodeClick = (data) => {
     } 
     else {
       const newTab = { 
-        id: tabId, type: 'table', title: `📄 ${data.tableName}`, connectionId: data.connectionId, 
+        id: tabId, type: 'table', title: `${data.tableName}`, connectionId: data.connectionId, 
         schema: data.schemaName, table: data.tableName, loading: true, error: '', 
         result: { rows: [], fields: [] }, currentPage: 1, pageSize: 50, total: 0 
       };
@@ -475,9 +509,7 @@ const handleTabChange = (tabId) => {
   }
 };
 
-// ================= 查询与自动补全逻辑 =================
 const nextQueryIndex = ref(1);
-
 const fetchAutoCompletionData = async (tab) => {
   if (!tab.connectionId || !tab.schema) { tab.hintTables = {}; return; }
   try {
@@ -491,7 +523,6 @@ const fetchAutoCompletionData = async (tab) => {
 };
 
 const onQuerySchemaChange = (tab) => { fetchAutoCompletionData(tab); };
-
 const refreshSchemaList = async (tab) => {
   if (!tab.connectionId) return;
   try {
@@ -512,7 +543,7 @@ const addQueryTab = () => {
   if (!activeConnection.value) return;
   const id = `query-${Date.now()}`;
   const newTab = {
-    id, type: 'query', title: `🔍 查询${nextQueryIndex.value++}`,
+    id, type: 'query', title: `查询${nextQueryIndex.value++}`,
     connectionId: activeConnection.value.id, schema: activeSchema.value || '', 
     schemaList: [], hintTables: {}, sql: '', loading: false, error: '', result: null,
     showBottomPanel: true, editorHeight: 60, bottomTab: 'result', history: []
@@ -589,12 +620,10 @@ const startDrag = (e, tab) => {
     if (newHeight > 85) newHeight = 85;
     tab.editorHeight = newHeight;
   };
-
   const onMouseUp = () => {
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
   };
-
   document.addEventListener('mousemove', onMouseMove);
   document.addEventListener('mouseup', onMouseUp);
 };
@@ -642,7 +671,7 @@ const testConnection = async (config) => {
   } catch (error) { ElMessage.error(`测试失败: ${error.message}`); } finally { loading.value = false; }
 };
 
-// ================= 【核心新增】AI 助手逻辑 (设置与生成) =================
+// ================= AI 助手逻辑 =================
 const showAiConfigDialog = ref(false);
 const aiConfig = reactive({ provider: 'openai', apiKey: '', baseUrl: '', model: '' });
 
@@ -650,69 +679,53 @@ const openAiConfigDialog = async () => {
   try {
     if (window.electronAPI && window.electronAPI.getAiConfig) {
       const config = await window.electronAPI.getAiConfig();
-      if (config) {
-        Object.assign(aiConfig, config);
-      }
+      if (config) Object.assign(aiConfig, config);
     }
     showAiConfigDialog.value = true;
-  } catch (err) {
-    ElMessage.error("获取 AI 配置失败");
-  }
+  } catch (err) { ElMessage.error("获取 AI 配置失败"); }
 };
 
 const saveAiConfig = async () => {
-  if (!aiConfig.apiKey) {
-    return ElMessage.warning('API Key 不能为空！');
-  }
+  if (!aiConfig.apiKey) return ElMessage.warning('API Key 不能为空！');
   try {
     const res = await window.electronAPI.saveAiConfig(JSON.parse(JSON.stringify(aiConfig)));
     if (res.success) {
       ElMessage.success('AI 配置保存成功！');
       showAiConfigDialog.value = false;
-    } else {
-      ElMessage.error('保存失败: ' + res.error);
-    }
-  } catch (err) {
-    ElMessage.error(err.message);
-  }
-};
-
-const showAiPromptDialog = ref(false);
-const aiPromptInput = ref('');
-const aiGenerating = ref(false);
-const targetAiTab = ref(null);
-
-const openAiPromptDialog = (tab) => {
-  if (!tab.connectionId) return ElMessage.warning('请先选择数据库连接！');
-  targetAiTab.value = tab;
-  aiPromptInput.value = '';
-  showAiPromptDialog.value = true;
+    } else { ElMessage.error('保存失败: ' + res.error); }
+  } catch (err) { ElMessage.error(err.message); }
 };
 
 const generateSqlWithAi = async () => {
-  if (!aiPromptInput.value.trim()) return ElMessage.warning('请输入需求描述！');
-  const tab = targetAiTab.value;
+  if (!aiPromptInput.value.trim()) return;
+  const currentTab = openTabs.value.find(t => t.id === activeTab.value);
+  if (!currentTab || currentTab.type !== 'query') {
+    return ElMessage.warning('请先在左侧打开或新建一个查询窗口');
+  }
   
+  const userText = aiPromptInput.value;
+  aiChatHistory.value.push({ role: 'user', content: userText });
+  aiPromptInput.value = '';
   aiGenerating.value = true;
+  
   try {
     const res = await window.electronAPI.generateSql({
-      prompt: aiPromptInput.value,
-      connectionId: tab.connectionId,
-      schema: tab.schema
+      prompt: userText,
+      connectionId: currentTab.connectionId,
+      schema: currentTab.schema
     });
 
     if (res.success && res.sql) {
-      // 成功后，将生成的 SQL 拼接到编辑器末尾
-      const editorRef = editorRefs.value[tab.id];
-      if (editorRef) {
-        const currentSql = editorRef.getSelectionOrAll();
-        const appendSql = `\n\n-- AI 自动生成 (${aiPromptInput.value}):\n${res.sql}\n`;
-        editorRef.setSql(currentSql + appendSql);
-      } else {
-        tab.sql += `\n\n-- AI 自动生成:\n${res.sql}\n`;
-      }
-      ElMessage.success('✨ SQL 生成成功！已添加到编辑器。');
-      showAiPromptDialog.value = false;
+      aiChatHistory.value.push({ 
+        role: 'ai', 
+        content: `这是为您生成的 SQL 语句：\n\n${res.sql}`,
+        sql: res.sql 
+      });
+      // 滚动到底部
+      nextTick(() => {
+        const container = document.querySelector('.custom-scrollbar');
+        if(container) container.scrollTop = container.scrollHeight;
+      });
     } else {
       throw new Error(res.error || '大模型返回为空');
     }
@@ -721,69 +734,91 @@ const generateSqlWithAi = async () => {
       ElMessageBox.confirm('您尚未配置 AI API Key，或者 Key 无效。是否立即前往配置？', '提示', { type: 'warning' })
         .then(() => openAiConfigDialog());
     } else {
-      ElMessage.error('AI 生成失败: ' + err.message);
+      aiChatHistory.value.push({ role: 'ai', content: `生成失败: ${err.message}` });
     }
   } finally {
     aiGenerating.value = false;
   }
 };
+
+const insertSqlToEditor = (sqlToInsert) => {
+  const currentTab = openTabs.value.find(t => t.id === activeTab.value);
+  if (currentTab) {
+    const editorRef = editorRefs.value[currentTab.id];
+    if (editorRef && editorRef.insertText) {
+      editorRef.insertText(`\n-- AI 自动生成:\n${sqlToInsert}\n`);
+    } else {
+      currentTab.sql += `\n-- AI 自动生成:\n${sqlToInsert}\n`;
+    }
+    ElMessage.success('已插入到编辑器');
+  }
+};
 </script>
 
 <style scoped>
-.app-root { height: 100vh; }
-.left { border-right: 1px solid var(--el-border-color); display: flex; flex-direction: column; }
-.sidebar-header { padding: 10px; border-bottom: 1px solid var(--el-border-color); display: flex; gap: 10px; }
-.header-btn { flex: 1; margin-left: 0 !important; }
-.refresh-tree-btn { flex: 0 0 auto !important; padding: 8px 12px !important; }
-.connection-tree { flex: 1; padding: 8px; overflow: auto; }
+/* 覆盖 Element Plus 树形控件样式，使其更现代 */
+:deep(.modern-tree) {
+  background: transparent;
+  --el-tree-node-hover-bg-color: #f1f5f9;
+}
+:deep(.modern-tree .el-tree-node__content) {
+  height: 32px;
+  border-radius: 6px;
+  margin-bottom: 2px;
+}
 
-/* === 【新增】左侧边栏底部的 AI 设置区 === */
-.sidebar-footer { padding: 10px; border-top: 1px solid var(--el-border-color); text-align: center; }
-.form-tip { font-size: 12px; color: #909399; margin-top: 4px; line-height: 1.4; }
+/* 覆盖 Tabs 样式 */
+:deep(.modern-tabs > .el-tabs__header) {
+  margin: 0;
+  border-bottom: 1px solid #e2e8f0;
+  background-color: #f8fafc;
+}
+:deep(.modern-tabs > .el-tabs__header .el-tabs__nav) {
+  border: none !important;
+}
+:deep(.modern-tabs > .el-tabs__header .el-tabs__item) {
+  border: 1px solid transparent !important;
+  border-right: 1px solid #e2e8f0 !important;
+  background-color: #f1f5f9;
+  color: #64748b;
+  font-size: 13px;
+  height: 36px;
+  line-height: 36px;
+}
+:deep(.modern-tabs > .el-tabs__header .el-tabs__item.is-active) {
+  background-color: #ffffff;
+  border-top: 2px solid #3b82f6 !important;
+  color: #0f172a;
+  border-bottom-color: #ffffff !important;
+}
+:deep(.modern-tabs > .el-tabs__content) {
+  flex: 1;
+  overflow: hidden;
+}
 
-.right { height: 100%; }
-.topbar { border-bottom: 1px solid var(--el-border-color); display: flex; align-items: center; justify-content: space-between; }
-.crumb { margin-left: 10px; color: var(--el-text-color-secondary); }
-.main { padding: 10px; height: calc(100vh - 60px); }
+/* 拖拽条 */
+.resizer { 
+  height: 4px; 
+  background-color: #f1f5f9; 
+  cursor: row-resize; 
+  border-top: 1px solid #e2e8f0; 
+  border-bottom: 1px solid #e2e8f0; 
+  transition: background 0.2s;
+}
+.resizer:hover, .resizer:active { 
+  background-color: #3b82f6; 
+}
 
-.empty-workspace { height: 100%; display: flex; align-items: center; justify-content: center; background-color: var(--el-fill-color-light); border-radius: 8px; }
-.tabs { height: 100%; }
-
-.table-data-wrap { display: flex; flex-direction: column; height: calc(100vh - 130px); }
-.table-data-toolbar { padding-bottom: 10px; display: flex; align-items: center; gap: 15px; }
-.table-data-content { flex: 1; min-height: 0; }
-
-/* === 查询主面板弹性布局 === */
-.query-wrap { display: flex; flex-direction: column; height: calc(100vh - 130px); }
-.query-toolbar { display: flex; gap: 10px; align-items: center; padding-bottom: 10px; }
-
-/* 上下拖拽相关样式 */
-.split-pane { flex: 1; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--el-border-color); border-radius: 4px; }
-.query-editor-container { overflow: hidden; display: flex; flex-direction: column; }
-.resizer { height: 6px; background-color: #f5f7fa; cursor: row-resize; border-top: 1px solid #ebeef5; border-bottom: 1px solid #ebeef5; transition: background 0.2s;}
-.resizer:hover, .resizer:active { background-color: #409eff; }
-
-/* 底部面板体系 */
-.query-bottom-panel { display: flex; flex-direction: column; overflow: hidden; background: #fff; }
-.bottom-panel-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ebeef5; background: #f8f9fa; }
-.bottom-tabs span { display: inline-block; padding: 8px 15px; cursor: pointer; font-size: 13px; color: #606266; }
-.bottom-tabs span:hover { color: #409eff; }
-.bottom-tabs span.active { color: #409eff; border-bottom: 2px solid #409eff; font-weight: bold; background: #fff;}
-.bottom-actions { margin-right: 10px; }
-.bottom-panel-content { flex: 1; overflow: hidden; }
-.tab-content-inner { height: 100%; display: flex; flex-direction: column; }
-
-/* 消息日志与文本样式 */
-.message-log { padding: 15px; overflow-y: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.6; }
-.error-text { color: #f56c6c; }
-.success-text { color: #67c23a; }
-
-/* 面板隐藏时的恢复栏 */
-.restore-bar { text-align: center; padding: 4px; background: #f4f4f5; cursor: pointer; font-size: 12px; color: #909399; margin-top: 5px; border-radius: 4px; }
-.restore-bar:hover { color: #409eff; background: #ecf5ff; }
-
-.custom-tree-node { flex: 1; display: flex; align-items: center; justify-content: space-between; font-size: 14px; padding-right: 8px; overflow: hidden; }
-.node-label { display: flex; align-items: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.node-actions { display: none; flex-shrink: 0; }
-:deep(.el-tree-node__content:hover) .node-actions { display: inline-block; }
+/* 滚动条美化 */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 3px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background-color: transparent;
+}
 </style>
