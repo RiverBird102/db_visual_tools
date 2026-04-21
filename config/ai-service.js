@@ -88,6 +88,52 @@ ${dbContext ? `【数据库上下文信息】\n${dbContext}` : ''}`;
       return { success: false, error: error.message };
     }
   }
+
+  // ==========================================
+  // 【新增核心功能】：AI 慢查询诊断与索引推荐
+  // ==========================================
+  async analyzeSlowQuery(sql, explainPlan, columns) {
+    try {
+      const client = this.getClient();
+      const aiConfig = this.store.get('ai.config');
+
+      // 构建专业 DBA 级别的提示词
+      const prompt = `
+你是一名资深的数据库专家(DBA)。请分析以下慢查询并给出优化建议。
+
+【原始 SQL】: 
+${sql}
+
+【执行计划 (Explain Plan)】: 
+${explainPlan}
+
+【相关表结构信息】: 
+${JSON.stringify(columns, null, 2)}
+
+请从以下维度进行深度分析，并以格式清晰的 Markdown 格式回复：
+1. **🚀 性能瓶颈分析**：指出为什么慢（结合执行计划，如是否发生了全表扫描、隐式类型转换、不合理的嵌套循环关联等）。
+2. **🎯 索引优化建议**：如果可以通过加索引解决，请直接给出具体的 \`CREATE INDEX\` SQL 语句，并解释为什么这个索引有效。
+3. **✍️ SQL 改写建议**：如果当前写法不佳，请提供优化后的 SQL 写法示例（如避免使用 SELECT *，优化 IN 子查询为 JOIN 等）。
+4. **💡 综合建议**：其他层面的优化建议（如表数据量过大建议分区、需要更新统计信息等）。
+`;
+
+      const response = await client.chat.completions.create({
+        model: aiConfig.model || 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: '你是一个专业的国产数据库(达梦/人大金仓/openGauss)调优助手，精通 SQL 性能诊断。' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.3 // 保持较低的温度，确保输出的建议专业、严谨且不跑题
+      });
+
+      return {
+        success: true,
+        analysis: response.choices[0].message.content
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
 }
 
 module.exports = AIService;

@@ -70,7 +70,7 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// IPC通信 - 数据库连接相关
+// ================= IPC通信 - 数据库连接相关 =================
 ipcMain.handle('db:save-connection', async (event, connection) => {
   try {
     if (!connection || typeof connection !== 'object') throw new Error('连接参数不合法');
@@ -120,11 +120,10 @@ ipcMain.handle('db:update-connection', async (event, connection) => {
   }
 });
 
-// 【新增：清理底层数据库连接缓存】
+// 清理底层数据库连接缓存
 ipcMain.handle('db:disconnect', async (event, id) => {
   try {
     if (!id) throw new Error('ID不能为空');
-    // 如果你的 dbConnections (db-config.js) 内部有缓存逻辑，调用它清理
     if (dbConnections.disconnect) {
       await dbConnections.disconnect(id);
     }
@@ -147,7 +146,7 @@ ipcMain.handle('db:delete-connection', async (event, id) => {
   }
 });
 
-// 【核心修改】：接收前端传过来的 schema
+// 执行 SQL
 ipcMain.handle('db:execute-sql', async (event, { connectionId, schema, sql }) => {
   try {
     if (!connectionId) throw new Error('connectionId不能为空');
@@ -157,7 +156,6 @@ ipcMain.handle('db:execute-sql', async (event, { connectionId, schema, sql }) =>
     if (!connection) {
       throw new Error('连接不存在');
     }
-    // 把 schema 传给底层的执行函数
     const result = await dbConnections.executeSql(connection, sql, schema);
     return { success: true, data: result };
   } catch (error) {
@@ -165,7 +163,7 @@ ipcMain.handle('db:execute-sql', async (event, { connectionId, schema, sql }) =>
   }
 });
 
-// IPC通信 - 元数据（库/表/字段）
+// ================= IPC通信 - 元数据（库/表/字段） =================
 ipcMain.handle('db:list-schemas', async (event, { connectionId } = {}) => {
   try {
     if (!connectionId) throw new Error('connectionId不能为空');
@@ -206,7 +204,7 @@ ipcMain.handle('db:get-table-columns', async (event, { connectionId, schema, tab
   }
 });
 
-// IPC通信 - 对话框
+// ================= IPC通信 - 对话框 =================
 ipcMain.handle('dialog:open-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
@@ -222,13 +220,13 @@ ipcMain.handle('dialog:save-file', async () => {
   return result;
 });
 
-// ================= 新增：AI 配置与功能 =================
+// ================= AI 配置与功能 =================
 // 获取 AI 配置
 ipcMain.handle('ai:get-config', async () => {
   return store.get('ai.config', {
     provider: 'openai',
     apiKey: '',
-    baseUrl: '[https://api.openai.com/v1](https://api.openai.com/v1)',
+    baseUrl: 'https://api.openai.com/v1', // 修复了这里的链接语法问题
     model: 'gpt-3.5-turbo'
   });
 });
@@ -251,6 +249,16 @@ ipcMain.handle('ai:generate-sql', async (event, { prompt, connectionId, schema }
     
     // 允许不传 connection，此时不使用数据库上下文辅助
     const result = await aiService.generateSql(prompt, connection, schema);
+    return result;
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// AI 慢查询诊断
+ipcMain.handle('ai:analyze-query', async (event, { sql, explainPlan, columns }) => {
+  try {
+    const result = await aiService.analyzeSlowQuery(sql, explainPlan, columns);
     return result;
   } catch (error) {
     return { success: false, error: error.message };

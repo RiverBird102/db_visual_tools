@@ -125,6 +125,11 @@
                 <el-button type="primary" size="small" @click="executeSqlForTab(tab)" :loading="tab.loading" class="ml-2 shadow-sm">
                   <span class="flex items-center gap-1"><Play :size="12"/> 执行查询</span>
                 </el-button>
+
+                <el-button type="warning" size="small" @click="handleAiDiagnosis(tab)" class="shadow-sm bg-amber-500 hover:bg-amber-600 border-none">
+                  <span class="flex items-center gap-1"><Activity :size="12"/> AI 诊断</span>
+                </el-button>
+                
                 <el-button size="small" @click="tab.sql = ''">清空</el-button>
               </div>
 
@@ -259,6 +264,18 @@
       </div>
     </aside>
 
+    <el-dialog v-model="showAiAnalysisDialog" title="🔬 AI 慢查询诊断报告" width="800px">
+      <div v-loading="analysisLoading" class="min-h-[300px] max-h-[60vh] overflow-y-auto">
+        <div v-if="aiAnalysisResult" class="p-2">
+          <pre class="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-700 bg-slate-50 p-4 rounded-lg border border-slate-200">{{ aiAnalysisResult }}</pre>
+        </div>
+        <el-empty v-else-if="!analysisLoading" description="正在深度分析执行计划，请稍候..." />
+      </div>
+      <template #footer>
+        <el-button @click="showAiAnalysisDialog = false">关闭报告</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog :title="isEditMode ? '编辑数据库连接' : '新建数据库连接'" v-model="showConnectDialog" width="600px" destroy-on-close>
       <db-connect :initial-data="currentEditData" @save="saveConnection" @test="testConnection" @cancel="showConnectDialog = false"></db-connect>
     </el-dialog>
@@ -301,11 +318,11 @@ import DbConnect from './components/DbConnect.vue';
 import SqlEditor from './components/SqlEditor.vue';
 import DataViewer from './components/DataViewer.vue';
 
-// 引入现代图标
+// 引入现代图标 (新增了 Activity 图标)
 import { 
   Plus, RefreshCw, Edit3, Trash2, Zap, Database, Table as TableIcon,
   Play, Settings, Sparkles, MessageSquare, BarChart2, ChevronDown, 
-  Send, Bot, User, ArrowLeftToLine, FileCode2
+  Send, Bot, User, ArrowLeftToLine, FileCode2, Activity
 } from 'lucide-vue-next';
 
 // 基础状态
@@ -326,6 +343,11 @@ const aiPanelTab = ref('chat');
 const aiChatHistory = ref([]);
 const aiPromptInput = ref('');
 const aiGenerating = ref(false);
+
+// === 【新增】：AI 诊断状态 ===
+const showAiAnalysisDialog = ref(false);
+const analysisLoading = ref(false);
+const aiAnalysisResult = ref('');
 
 // 存储各个 Editor 的实例
 const editorRefs = {};
@@ -572,8 +594,10 @@ const removeTab = (targetId) => {
 };
 
 const executeSqlForTab = async (tab) => {
-  const editorRef = editorRefs[tab.id]; // 删除 .value
-  const sql = editorRef ? editorRef.getSelectionOrAll().trim() : (tab.sql || '').trim();
+  const editorRef = editorRefs[tab.id]; 
+  const sql = editorRef && typeof editorRef.getSelectionOrAll === 'function' 
+    ? editorRef.getSelectionOrAll().trim() 
+    : (tab.sql || '').trim();
   
   if (!sql) return ElMessage.warning('请输入或选中要执行的 SQL 语句');
   if (!tab.connectionId) return ElMessage.warning('请选择数据库连接');
@@ -605,6 +629,70 @@ const executeSqlForTab = async (tab) => {
     tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '失败' });
   } finally { 
     tab.loading = false; 
+  }
+};
+
+// ================= 【新增】：处理 AI 慢查询诊断逻辑 =================
+const handleAiDiagnosis = async (tab) => {
+  const editorRef = editorRefs[tab.id]; 
+  const sql = editorRef && typeof editorRef.getSelectionOrAll === 'function'
+    ? editorRef.getSelectionOrAll().trim() 
+    : (tab.sql || '').trim();
+  
+  if (!sql) return ElMessage.warning('请输入或选中要诊断的 SQL 语句');
+  if (!tab.connectionId) return ElMessage.warning('请选择数据库连接');
+
+  showAiAnalysisDialog.value = true;
+  analysisLoading.value = true;
+  aiAnalysisResult.value = '';
+
+  try {
+    // 1. 获取执行计划 (EXPLAIN)
+    const explainSql = `EXPLAIN ${sql}`;
+    const explainRes = await window.electronAPI.executeSql({ 
+      connectionId: tab.connectionId, 
+      schema: tab.schema, 
+      sql: explainSql 
+    });
+    
+    if (!explainRes.success) throw new Error('获取执行计划失败: ' + explainRes.error);
+    const explainPlan = JSON.stringify(explainRes.data.rows, null, 2);
+
+    // 2. 获取表结构
+    const tableMatch = sql.match(/FROM\s+["`]?(\w+)["`]?/i);
+    let columns = [];
+    if (tableMatch) {
+      const colRes = await window.electronAPI.getTableColumns({
+        connectionId: tab.connectionId,
+        schema: tab.schema,
+        table: tableMatch[1]
+      });
+      if (colRes.success) columns = colRes.data;
+    }
+
+    // 3. 调用 AI 诊断接口
+    const res = await window.electronAPI.analyzeQuery({
+      sql,
+      explainPlan,
+      columns
+    });
+
+    if (res.success) {
+      aiAnalysisResult.value = res.analysis;
+    } else {
+      throw new Error(res.error);
+    }
+  } catch (err) {
+    if (err.message.includes('未配置') || err.message.includes('API key')) {
+      ElMessageBox.confirm('您尚未配置 AI API Key。是否前往配置？', '提示', { type: 'warning' })
+        .then(() => openAiConfigDialog());
+      showAiAnalysisDialog.value = false;
+    } else {
+      ElMessage.error('诊断失败: ' + err.message);
+      showAiAnalysisDialog.value = false;
+    }
+  } finally {
+    analysisLoading.value = false;
   }
 };
 
@@ -749,8 +837,9 @@ const insertSqlToEditor = (sqlToInsert) => {
   const currentTab = openTabs.value.find(t => t.id === activeTab.value);
   if (currentTab) {
     const editorRef = editorRefs[currentTab.id];
-    if (editorRef && editorRef.insertText) {
-      editorRef.insertText(`\n-- AI 自动生成:\n${sqlToInsert}\n`);
+    if (editorRef && typeof editorRef.setSql === 'function') {
+      const currentSql = typeof editorRef.getSelectionOrAll === 'function' ? editorRef.getSelectionOrAll() : '';
+      editorRef.setSql(currentSql + `\n-- AI 自动生成:\n${sqlToInsert}\n`);
     } else {
       currentTab.sql += `\n-- AI 自动生成:\n${sqlToInsert}\n`;
     }

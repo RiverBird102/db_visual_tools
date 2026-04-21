@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAiConfig: () => ipcRenderer.invoke('ai:get-config'),
   saveAiConfig: (config) => ipcRenderer.invoke('ai:save-config', config),
   generateSql: (params) => ipcRenderer.invoke('ai:generate-sql', params),
+  analyzeQuery: (data) => ipcRenderer.invoke('ai:analyze-query', data),
   
   // 错误处理
   onError: (callback) => ipcRenderer.on('error', (event, error) => callback(error))
