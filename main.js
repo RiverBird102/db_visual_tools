@@ -255,6 +255,16 @@ ipcMain.handle('ai:generate-sql', async (event, { prompt, connectionId, schema }
   }
 });
 
+// AI 智能问答机器人
+ipcMain.handle('ai:ask-question', async (event, question) => {
+  try {
+    const result = await aiService.askDatabaseQuestion(question);
+    return result;
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // AI 慢查询诊断
 ipcMain.handle('ai:analyze-query', async (event, { sql, explainPlan, columns }) => {
   try {

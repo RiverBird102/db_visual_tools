@@ -93,6 +93,40 @@ ${dbContext ? `【数据库上下文信息】\n${dbContext}` : ''}`;
     }
   }
 
+// ==========================================
+  // 【新增功能】：智能问答机器人 (DBA 专家问答)
+  // ==========================================
+  async askDatabaseQuestion(question) {
+    try {
+      const client = this.getClient();
+      const aiConfig = this.store.get('ai.config');
+
+      const prompt = `
+你是一个拥有20年经验的资深数据库专家(DBA)。请专业、准确、通俗易懂地解答用户的数据库相关问题。
+如果用户的问题与数据库、编程、IT技术完全无关，请礼貌地拒绝回答，并引导用户提问技术问题。
+
+【用户问题】: 
+${question}
+`;
+
+      const response = await client.chat.completions.create({
+        model: aiConfig.model || 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: '你是一个专业的数据库领域智能问答机器人。' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.6 // 适当的温度，让回答既专业又不失灵活性
+      });
+
+      return { 
+        success: true, 
+        answer: response.choices[0].message.content.trim() 
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
   // ==========================================
   // 【功能二】：AI 慢查询诊断与索引推荐
   // ==========================================

@@ -264,8 +264,16 @@
       </div>
 
       <div v-show="aiPanelTab === 'chat'" class="flex-1 flex flex-col p-4 overflow-hidden">
+        
+        <div class="flex justify-center mb-3 shrink-0">
+          <el-radio-group v-model="chatMode" size="small">
+            <el-radio-button label="sql">代码生成 (Text2SQL)</el-radio-button>
+            <el-radio-button label="qa">DBA 问答专家</el-radio-button>
+          </el-radio-group>
+        </div>
+
         <div class="flex-1 overflow-y-auto space-y-4 mb-4 pr-2 custom-scrollbar text-sm" id="chat-container">
-          <div v-for="(msg, i) in aiChatHistory" :key="i" 
+          <div v-for="(msg, i) in currentChatHistory" :key="i" 
                :class="msg.role === 'user' ? 'ml-8 items-end' : 'mr-8 items-start'"
                class="flex flex-col">
             <div :class="msg.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-700 rounded-tl-none'"
@@ -276,11 +284,15 @@
               <ArrowLeftToLine :size="12"/> 插入到当前编辑器
             </button>
           </div>
-          <div v-if="aiGenerating" class="flex gap-1 ml-2 mt-4"><span class="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></span></div>
+          <div v-if="aiGenerating" class="flex gap-1 ml-2 mt-4">
+            <span class="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></span>
+          </div>
         </div>
 
         <div class="relative shrink-0">
-          <textarea v-model="aiPromptInput" placeholder="描述您的 SQL 查询需求..." @keydown.ctrl.enter="generateSqlWithAi"
+          <textarea v-model="aiPromptInput" 
+                    :placeholder="chatMode === 'sql' ? '描述您的 SQL 查询需求...' : '向 DBA 专家提问任何数据库相关知识...'" 
+                    @keydown.ctrl.enter="generateSqlWithAi"
                     class="w-full h-24 bg-white border border-slate-300 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-blue-500 outline-none shadow-sm resize-none transition-all"></textarea>
           <button @click="generateSqlWithAi" :disabled="aiGenerating || !aiPromptInput.trim()"
                   class="absolute bottom-3 right-3 text-white bg-blue-600 p-2 rounded-xl hover:bg-blue-700 disabled:bg-slate-300">
@@ -360,7 +372,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, nextTick, onMounted } from 'vue';
+import { ref, reactive, nextTick, onMounted, computed} from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import * as echarts from 'echarts'; // 【核心】：引入 ECharts
 
@@ -392,6 +404,16 @@ const aiPanelTab = ref('chat');
 const aiChatHistory = ref([]);
 const aiPromptInput = ref('');
 const aiGenerating = ref(false);
+const chatMode = ref('sql'); // 【新增】：当前聊天模式，默认为 'sql'，可选 'qa'
+
+// 【新增】：将原来的单一数组拆分为两个独立的数组
+const sqlChatHistory = ref([]);
+const qaChatHistory = ref([]);
+
+// 【新增】：使用 computed 动态返回当前激活的聊天记录
+const currentChatHistory = computed(() => {
+  return chatMode.value === 'sql' ? sqlChatHistory.value : qaChatHistory.value;
+});
 
 // AI 诊断状态
 const showAiAnalysisDialog = ref(false);
@@ -701,26 +723,67 @@ const saveAiConfig = async () => {
   } catch(e) { ElMessage.error(e.message); }
 };
 
-// 【AI 功能1】：智能生成 SQL (Chat)
+// 【AI 功能1】：智能双模式交互 (隔离聊天记录)
 const generateSqlWithAi = async () => {
   if (!aiPromptInput.value.trim()) return;
-  const currentTab = openTabs.value.find(t => t.id === activeTab.value);
-  if (!currentTab || currentTab.type !== 'query') return ElMessage.warning('请先打开查询窗口');
+  
+  const isSqlMode = chatMode.value === 'sql';
+  // 动态获取当前应该操作的聊天记录数组
+  const targetHistory = isSqlMode ? sqlChatHistory.value : qaChatHistory.value;
+  
+  if (isSqlMode) {
+    const currentTab = openTabs.value.find(t => t.id === activeTab.value);
+    if (!currentTab || currentTab.type !== 'query') {
+      return ElMessage.warning('生成 SQL 请先在左侧打开一个查询窗口');
+    }
+  }
   
   const userText = aiPromptInput.value;
-  aiChatHistory.value.push({ role: 'user', content: userText });
-  aiPromptInput.value = ''; aiGenerating.value = true;
+  // 消息 push 到对应的数组中
+  targetHistory.push({ role: 'user', content: userText });
+  aiPromptInput.value = ''; 
+  aiGenerating.value = true;
+  
   try {
-    const res = await window.electronAPI.generateSql({ prompt: userText, connectionId: currentTab.connectionId, schema: currentTab.schema });
-    if (res.success && res.sql) {
-      aiChatHistory.value.push({ role: 'ai', content: `为您生成的 SQL：\n\n${res.sql}`, sql: res.sql });
-      nextTick(() => { const c = document.getElementById('chat-container'); if(c) c.scrollTop = c.scrollHeight; });
-    } else throw new Error(res.error);
+    if (isSqlMode) {
+      // ========= 模式 A：代码生成 =========
+      const currentTab = openTabs.value.find(t => t.id === activeTab.value);
+      const res = await window.electronAPI.generateSql({ 
+        prompt: userText, 
+        connectionId: currentTab.connectionId, 
+        schema: currentTab.schema 
+      });
+      
+      if (res.success && res.sql) {
+        targetHistory.push({ role: 'ai', content: `为您生成的 SQL：\n\n${res.sql}`, sql: res.sql });
+      } else {
+        throw new Error(res.error);
+      }
+    } else {
+      // ========= 模式 B：DBA 问答 =========
+      const res = await window.electronAPI.askQuestion(userText);
+      
+      if (res.success && res.answer) {
+        targetHistory.push({ role: 'ai', content: res.answer });
+      } else {
+        throw new Error(res.error);
+      }
+    }
+    
+    nextTick(() => { 
+      const c = document.getElementById('chat-container'); 
+      if (c) c.scrollTop = c.scrollHeight; 
+    });
+    
   } catch (err) {
-    if (err.message.includes('未配置')) {
+    if (err.message && err.message.includes('未配置')) {
       ElMessageBox.confirm('您尚未配置 AI API Key。', '提示', { type: 'warning' }).then(() => openAiConfigDialog());
-    } else { aiChatHistory.value.push({ role: 'ai', content: `生成失败: ${err.message}` }); }
-  } finally { aiGenerating.value = false; }
+    } else { 
+      targetHistory.push({ role: 'ai', content: `请求失败: ${err.message}` }); 
+    }
+  } finally { 
+    aiGenerating.value = false; 
+  }
 };
 
 const insertSqlToEditor = (sql) => {
