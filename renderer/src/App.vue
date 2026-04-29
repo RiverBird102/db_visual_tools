@@ -26,6 +26,7 @@
           node-key="treeId"
           highlight-current
           @node-click="handleNodeClick"
+          @node-contextmenu="handleContextMenu"
           class="modern-tree"
         >
           <template #default="{ node, data }">
@@ -40,9 +41,45 @@
                 <button @click.stop="openEditDialog(data)" class="text-blue-500 hover:text-blue-700 p-1"><Edit3 :size="12" /></button>
                 <button @click.stop="deleteConnection(data)" class="text-red-500 hover:text-red-700 p-1"><Trash2 :size="12" /></button>
               </span>
+              <span class="hidden group-hover:flex items-center gap-1 shrink-0" @click.stop v-if="data.type === 'schema'">
+                <button @click.stop="openDesignTab({ connectionId: data.connectionId, schemaName: data.schemaName, tableName: '' })" class="text-green-500 hover:text-green-700 p-1" title="可视化新建表"><Plus :size="14" /></button>
+              </span>
+              <span class="hidden group-hover:flex items-center gap-1 shrink-0" @click.stop v-if="data.type === 'table'">
+                <button @click.stop="openDesignTab(data)" class="text-blue-500 hover:text-blue-700 p-1" title="设计表结构"><Edit3 :size="14" /></button>
+              </span>
             </div>
           </template>
         </el-tree>
+        <div 
+          v-show="contextMenu.visible" 
+          class="fixed bg-white border border-slate-200 shadow-xl rounded-lg py-1 z-[9999] text-sm min-w-[140px] transition-opacity"
+          :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
+          @click.stop
+        >
+          <template v-if="contextMenu.nodeData?.type === 'connection'">
+            <div class="px-4 py-2 hover:bg-blue-50 cursor-pointer text-slate-700 flex items-center gap-2" @click="handleContextAction('editConn')"><Edit3 :size="14"/> 编辑连接</div>
+            <div class="px-4 py-2 hover:bg-slate-50 cursor-pointer text-slate-700 flex items-center gap-2" @click="handleContextAction('refreshConn')"><RefreshCw :size="14"/> 刷新目录</div>
+            <div class="h-px bg-slate-100 my-1"></div>
+            <div class="px-4 py-2 hover:bg-red-50 cursor-pointer text-red-600 flex items-center gap-2" @click="handleContextAction('deleteConn')"><Trash2 :size="14"/> 删除连接</div>
+          </template>
+          
+          <template v-else-if="contextMenu.nodeData?.type === 'schema'">
+            <div class="px-4 py-2 hover:bg-slate-50 cursor-pointer text-slate-700 flex items-center gap-2" @click="handleContextAction('refreshSchema')"><RefreshCw :size="14"/> 刷新数据库</div>
+            <div class="px-4 py-2 hover:bg-blue-50 cursor-pointer text-blue-600 flex items-center gap-2 font-medium" @click="handleContextAction('showER')">
+              <Share2 :size="14"/> 查看数据库拓扑 (ER)
+            </div>
+            <div class="h-px bg-slate-100 my-1"></div>
+            <div class="px-4 py-2 hover:bg-green-50 cursor-pointer text-green-600 flex items-center gap-2 font-medium" @click="handleContextAction('newTable')"><Plus :size="14"/> 新建表结构</div>
+          </template>
+
+          <template v-else-if="contextMenu.nodeData?.type === 'table'">
+            <div class="px-4 py-2 hover:bg-blue-50 cursor-pointer text-slate-700 flex items-center gap-2" @click="handleContextAction('openTable')"><Database :size="14"/> 打开表 (数据)</div>
+            <div class="px-4 py-2 hover:bg-blue-50 cursor-pointer text-blue-600 flex items-center gap-2 font-medium" @click="handleContextAction('designTable')"><Edit3 :size="14"/> 设计表结构</div>
+            <div class="h-px bg-slate-100 my-1"></div>
+            <div class="px-4 py-2 hover:bg-amber-50 cursor-pointer text-amber-600 flex items-center gap-2" @click="handleContextAction('truncateTable')"><Trash2 :size="14"/> 清空表 (Truncate)</div>
+            <div class="px-4 py-2 hover:bg-red-50 cursor-pointer text-red-600 flex items-center gap-2 font-medium" @click="handleContextAction('dropTable')"><Trash2 :size="14"/> 删除表 (Drop)</div>
+          </template>
+        </div>
       </div>
 
       <div class="p-3 border-t border-slate-200 bg-slate-50">
@@ -246,6 +283,17 @@
               </div>
             </div>
 
+            <div v-else-if="tab.type === 'design'" class="flex flex-col h-full bg-slate-50">
+              <table-designer 
+                :connection-id="tab.connectionId" 
+                :schema="tab.schema" 
+                :table="tab.table"
+                @sqlGenerated="(sql) => handleGeneratedSql(sql)"
+              ></table-designer>
+            </div>
+            <div v-else-if="tab.type === 'er'" class="flex-1 flex flex-col h-full overflow-hidden bg-slate-50">
+              <ERDiagram :connection-id="tab.connectionId" :schema="tab.schema"></ERDiagram>
+            </div>
           </el-tab-pane>
         </el-tabs>
       </div>
@@ -301,18 +349,57 @@
         </div>
       </div>
 
-      <div v-show="aiPanelTab === 'insight'" class="flex-1 p-6 flex flex-col items-center justify-center text-center">
-        <div v-if="insightLoading" class="flex flex-col items-center">
-          <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
-          <p class="text-sm text-slate-500 font-medium">大模型正在生成图表代码...</p>
-        </div>
-        <div v-else>
-          <div class="w-16 h-16 bg-white border border-slate-200 rounded-2xl flex items-center justify-center mb-6 mx-auto shadow-sm">
-            <PieChart :size="32" class="text-blue-500" />
+      <div v-show="aiPanelTab === 'insight'" class="flex-1 p-4 flex flex-col overflow-y-auto custom-scrollbar bg-slate-50">
+        <div class="bg-white border border-blue-100 p-4 rounded-xl mb-4 shadow-sm shrink-0">
+          <div class="flex items-center gap-2 text-blue-700 font-bold mb-1 text-sm">
+            <PieChart :size="16"/> 对话式自助 BI
           </div>
-          <p class="text-sm text-slate-600 mb-2 font-bold">数据一键智能化</p>
-          <p class="text-xs text-slate-400 mb-8 leading-relaxed">AI 将自动分析查询结果的结果集，<br/>并生成可交互的 ECharts 看板。</p>
-          <el-button type="primary" class="w-full h-10 rounded-xl" @click="generateInsightFromCurrentTab">✨ 生成 AI 数据洞察报告</el-button>
+          <p class="text-xs text-slate-500 leading-relaxed">
+            输入你想看的数据指标（如：各部门人数对比），选择图表类型，AI 将全自动提取数据并生成看板。
+          </p>
+        </div>
+
+        <div class="space-y-5 flex-1">
+          <div class="flex flex-col">
+            <label class="block text-xs font-bold text-slate-700 mb-2">1. 你的分析目标是什么？</label>
+            <textarea 
+              v-model="smartInsightPrompt" 
+              placeholder="例如：统计每个部门的平均薪资，或者查询 SYS_USERS 表里各地区的人数分布..." 
+              class="w-full h-24 bg-white border border-slate-300 rounded-xl p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none shadow-sm resize-none"
+            ></textarea>
+            
+            <div class="flex flex-wrap gap-2 mt-2">
+              <span class="text-[10px] bg-slate-200 text-slate-600 px-2 py-1 rounded cursor-pointer hover:bg-blue-100" @click="smartInsightPrompt = '统计各部门的员工总人数'">各部门人数</span>
+              <span class="text-[10px] bg-slate-200 text-slate-600 px-2 py-1 rounded cursor-pointer hover:bg-blue-100" @click="smartInsightPrompt = '对比各部门的平均薪资'">部门平均薪资</span>
+            </div>
+          </div>
+
+          <div class="flex flex-col">
+            <label class="block text-xs font-bold text-slate-700 mb-2">2. 图表展现形式：</label>
+            <el-radio-group v-model="smartChartType" class="flex flex-col gap-2 w-full">
+              <el-radio label="auto" class="w-full mr-0 border border-slate-200 rounded-lg p-2 bg-white data-[checked]:border-blue-500">
+                <span class="font-bold text-blue-600 flex items-center gap-1"><Sparkles :size="14"/> AI 智能推荐最佳图表</span>
+              </el-radio>
+              <div class="grid grid-cols-2 gap-2 w-full pl-6">
+                <el-radio label="bar" class="mr-0"><BarChart2 :size="14" class="inline mr-1"/>柱状图</el-radio>
+                <el-radio label="pie" class="mr-0"><PieChart :size="14" class="inline mr-1"/>饼图</el-radio>
+                <el-radio label="line" class="mr-0"><Activity :size="14" class="inline mr-1"/>折线图</el-radio>
+                <el-radio label="scatter" class="mr-0">散点图</el-radio>
+              </div>
+            </el-radio-group>
+          </div>
+        </div>
+
+        <div class="mt-4 shrink-0">
+          <el-button 
+            type="primary" 
+            class="w-full h-11 rounded-xl bg-blue-600 border-none shadow-md hover:bg-blue-700 transition-all text-sm font-bold" 
+            @click="executeSmartInsightFlow" 
+            :loading="insightLoading"
+          >
+            <Bot :size="16" class="mr-1"/> 
+            {{ insightLoading ? 'AI 正在执行提取与渲染...' : '生成智能看板' }}
+          </el-button>
         </div>
       </div>
     </aside>
@@ -372,18 +459,20 @@
 </template>
 
 <script setup>
-import { ref, reactive, nextTick, onMounted, computed} from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ref, reactive, nextTick, onMounted, computed, onUnmounted, onErrorCaptured } from 'vue';
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
 import * as echarts from 'echarts'; // 【核心】：引入 ECharts
 
 // 组件与图标引入
 import DbConnect from './components/DbConnect.vue';
 import SqlEditor from './components/SqlEditor.vue';
 import DataViewer from './components/DataViewer.vue';
+import TableDesigner from './components/TableDesigner.vue';
+import ERDiagram from './components/ERDiagram.vue';
 import { 
   Plus, RefreshCw, Edit3, Trash2, Zap, Database, Table as TableIcon,
   Play, Settings, Sparkles, Bot, User, Send, ChevronDown, 
-  ArrowLeftToLine, FileCode2, Activity, Dna, BarChart2, PieChart
+  ArrowLeftToLine, FileCode2, Activity, Dna, BarChart2, PieChart, Share2
 } from 'lucide-vue-next';
 
 // ================= UI 基础状态 =================
@@ -442,6 +531,10 @@ const setEditorRef = (el, id) => {
 
 const treeProps = reactive({ label: 'label', children: 'children', isLeaf: 'isLeaf' });
 const getConnectionById = (id) => allConnections.value.find(c => c.id === id);
+
+// ================= 新增：自助式 BI 状态与逻辑 =================
+const smartInsightPrompt = ref('');
+const smartChartType = ref('auto'); // 默认让 AI 推荐
 
 onMounted(() => {
   loadConnections();
@@ -541,6 +634,152 @@ const testConnection = async (config) => {
     else throw new Error(res.error);
   } catch(e) { ElMessage.error(`测试失败: ${e.message}`); } finally { loading.value = false; }
 };
+
+
+// 👇 1. 打开设计器 Tab 的逻辑
+const openDesignTab = (data) => {
+  const id = `design_${data.connectionId}_${data.schemaName}_${data.tableName || 'new'}`;
+  if (!openTabs.value.find(t => t.id === id)) {
+    openTabs.value.push({ 
+      id, 
+      type: 'design', 
+      title: data.tableName ? `设计: ${data.tableName}` : '新建表', 
+      connectionId: data.connectionId, 
+      schema: data.schemaName, 
+      table: data.tableName || ''
+    });
+  }
+  activeTab.value = id;
+};
+
+// 👇 2. 接收设计器生成的 SQL，并自动打开一个查询窗口粘贴进去
+const handleGeneratedSql = (sql) => {
+  addQueryTab(); // 自动新建一个查询 Tab
+  setTimeout(() => {
+    // 找到刚刚新建的 Tab
+    const currentTab = openTabs.value.find(t => t.id === activeTab.value);
+    if (currentTab) {
+      currentTab.sql = sql; // 把生成的 DDL 语句自动填进去
+      ElMessage.success('建表 SQL 已生成，请确认并执行！');
+    }
+  }, 100);
+};
+
+
+// ================= 右键上下文菜单逻辑 =================
+const contextMenu = reactive({ visible: false, x: 0, y: 0, nodeData: null });
+
+// 监听树节点的右键事件
+const handleContextMenu = (event, data, node, component) => {
+  event.preventDefault(); // 阻止浏览器默认右键菜单
+  contextMenu.visible = true;
+  // 计算菜单弹出的坐标
+  contextMenu.x = event.clientX;
+  contextMenu.y = event.clientY;
+  contextMenu.nodeData = data;
+};
+
+// 点击空白处关闭菜单
+const closeContextMenu = () => { contextMenu.visible = false; };
+
+onMounted(() => {
+  document.addEventListener('click', closeContextMenu); // 全局监听点击
+});
+onUnmounted(() => {
+  document.removeEventListener('click', closeContextMenu);
+});
+
+// 分发右键菜单的具体点击指令
+const handleContextAction = async (action) => {
+  const data = contextMenu.nodeData;
+  closeContextMenu(); // 执行操作前先隐藏菜单
+  
+  switch (action) {
+    case 'editConn': openEditDialog(data); break;
+    case 'deleteConn': deleteConnection(data); break;
+    case 'refreshConn': loadConnections(); break;
+    case 'refreshSchema': loadConnections(); break; // 这里简化为重载整棵树，你后续可以优化为单节点重载
+    case 'newTable': openDesignTab({ connectionId: data.connectionId, schemaName: data.schemaName, tableName: '' }); break;
+    case 'openTable': handleNodeClick(data); break;
+    case 'designTable': openDesignTab(data); break;
+    case 'truncateTable': doTruncateTable(data); break;
+    case 'dropTable': doDropTable(data); break;
+    case 'showER': openERTab(data); break;
+  }
+};
+
+const openERTab = (data) => {
+  const id = `er_${data.connectionId}_${data.schemaName}`;
+  if (!openTabs.value.find(t => t.id === id)) {
+    openTabs.value.push({
+      id,
+      type: 'er',
+      title: `ER图: ${data.schemaName}`,
+      connectionId: data.connectionId,
+      schema: data.schemaName
+    });
+  }
+  activeTab.value = id;
+};
+
+// [核心工作量]：高危指令的安全执行（带防误触拦截与多方言适配）
+const doTruncateTable = async (data) => {
+  try {
+    await ElMessageBox.confirm(`此操作将通过 TRUNCATE 指令瞬间清空表 "${data.tableName}" 的所有数据，且不可回滚！确定继续？`, '⚠️ 高危操作确认', { type: 'warning', confirmButtonText: '确定清空', confirmButtonClass: 'el-button--danger' });
+    
+    const conn = getConnectionById(data.connectionId);
+    // 处理不同数据库环境的引号转义（应对国产库与MySQL的差异）
+    const safeSchema = conn.dbType === 'mysql' ? `\`${data.schemaName}\`` : `"${data.schemaName}"`;
+    const safeTable = conn.dbType === 'mysql' ? `\`${data.tableName}\`` : `"${data.tableName}"`;
+    
+    const res = await window.electronAPI.executeSql({ 
+      connectionId: data.connectionId, 
+      schema: data.schemaName, 
+      sql: `TRUNCATE TABLE ${safeSchema}.${safeTable}` 
+    });
+    
+    if (res.success) ElMessage.success(`表 ${data.tableName} 数据已清空！`);
+    else throw new Error(res.error);
+    
+    // 如果当前表正好在 Tabs 里打开了，自动刷新它的数据展示
+    const openedTab = openTabs.value.find(t => t.type === 'table' && t.connectionId === data.connectionId && t.table === data.tableName);
+    if (openedTab) loadTableData(openedTab);
+    
+  } catch(e) { 
+    if(e !== 'cancel') ElMessage.error(`清空失败: ${e.message}`); 
+  }
+};
+
+const doDropTable = async (data) => {
+  try {
+    const userInput = await ElMessageBox.prompt(`要彻底删除表结构及数据，请输入表名以确认：${data.tableName}`, '⚠️ 危险：删除表', {
+      confirmButtonText: '确定删除',
+      confirmButtonClass: 'el-button--danger',
+      inputValidator: (value) => value === data.tableName ? true : '表名输入不匹配',
+      inputErrorMessage: '表名输入不匹配'
+    });
+    
+    if (userInput.action === 'confirm') {
+      const conn = getConnectionById(data.connectionId);
+      const safeSchema = conn.dbType === 'mysql' ? `\`${data.schemaName}\`` : `"${data.schemaName}"`;
+      const safeTable = conn.dbType === 'mysql' ? `\`${data.tableName}\`` : `"${data.tableName}"`;
+      
+      const res = await window.electronAPI.executeSql({
+        connectionId: data.connectionId, schema: data.schemaName, sql: `DROP TABLE ${safeSchema}.${safeTable}`
+      });
+      if (!res.success) throw new Error(res.error);
+      ElMessage.success(`表 ${data.tableName} 已彻底删除！`);
+      
+      // 关闭相关的 Tab，并刷新左侧树
+      removeTab(`table_${data.connectionId}_${data.schemaName}_${data.tableName}`);
+      removeTab(`design_${data.connectionId}_${data.schemaName}_${data.tableName}`);
+      loadConnections(); 
+    }
+  } catch(e) {
+    if(e !== 'cancel') ElMessage.error(`删除失败: ${e.message}`);
+  }
+};
+// =======================================================
 
 // ================= 2. 数据查询与操作逻辑 =================
 
@@ -880,6 +1119,134 @@ const generateInsightFromCurrentTab = async () => {
     insightLoading.value = false; 
   }
 };
+
+
+
+// 核心工作流：意图提取 -> SQL生成 -> 查询 -> 图表渲染
+const executeSmartInsightFlow = async () => {
+  if (!activeConnection.value || !activeSchema.value) {
+    return ElMessage.warning('请先在左侧树中点击选中一个数据库');
+  }
+  if (!smartInsightPrompt.value.trim()) {
+    return ElMessage.warning('请描述您的分析需求');
+  }
+
+  insightLoading.value = true;
+  const connId = activeConnection.value.id;
+  const schema = activeSchema.value;
+  const userIntent = smartInsightPrompt.value;
+  const chartType = smartChartType.value;
+
+  try {
+    // 💡 阶段 1：根据用户意图，让 AI 写 SQL
+    ElMessage.info('步骤 1/3: 正在理解意图并生成 SQL...');
+    const sqlRes = await window.electronAPI.generateSql({ 
+      prompt: `请帮我编写SQL查询：${userIntent}`, 
+      connectionId: connId, 
+      schema: schema 
+    });
+    if (!sqlRes.success || !sqlRes.sql) throw new Error('SQL 生成失败: ' + sqlRes.error);
+    const generatedSql = sqlRes.sql;
+
+    // 💡 阶段 2：在系统后台悄悄执行这句 SQL 拿数据
+    ElMessage.info('步骤 2/3: 正在数据库中提取聚合数据...');
+    const execRes = await window.electronAPI.executeSql({ 
+      connectionId: connId, 
+      schema: schema, 
+      sql: generatedSql 
+    });
+    if (!execRes.success) throw new Error('数据查询失败: ' + execRes.error);
+    if (!execRes.data || !execRes.data.rows || execRes.data.rows.length === 0) {
+      throw new Error('当前查询结果为空，没有数据可以生成图表。');
+    }
+
+    // 💡 阶段 3：构建图表提示词，将用户选择的图表类型强制要求给 AI
+    ElMessage.info('步骤 3/3: 正在进行数据可视化智能排版...');
+    const pureRows = JSON.parse(JSON.stringify(execRes.data.rows, (key, value) => {
+      return typeof value === 'bigint' ? value.toString() : value;
+    }));
+
+    // 【核心创新点】：将用户的图表偏好和推荐逻辑通过内部字段传递给 AI 解析器
+    // 注意：这里我们利用 JS 对象包裹一下数据，传递给后端的 generateInsight
+    const chartRequestPayload = {
+      data: pureRows,
+      userIntent: userIntent,
+      preference: chartType === 'auto' 
+        ? "【指令】：请分析这批数据的数据特征。如果是占比推荐饼图，如果是对比推荐柱状图，如果是时间趋势推荐折线图。并且在分析报告中明确写出『系统推荐图表理由』。" 
+        : `【强制指令】：用户明确要求必须使用 ${chartType} (bar=柱状图, pie=饼图, line=折线图) 进行渲染。请直接生成对应类型的 ECharts 配置，并在报告中给出业务分析。`
+    };
+
+    const chartRes = await window.electronAPI.generateInsight(chartRequestPayload);
+    if (!chartRes.success) throw new Error('图表生成失败: ' + chartRes.error);
+
+    // 💡 阶段 4：渲染到新标签页展示给用户看
+    const insightId = `insight-${Date.now()}`;
+    openTabs.value.push({
+      id: insightId, 
+      type: 'insight', 
+      title: `📊 智能看板`,
+      // 将 AI 的分析结果和底层执行的 SQL 一起展示给用户
+      analysis: `${chartRes.analysis}\n\n====================\n💻 背后自动执行的 SQL:\n${generatedSql}`, 
+      option: chartRes.chartOption, 
+      originalRows: pureRows
+    });
+    activeTab.value = insightId;
+
+    nextTick(() => {
+      const chartDom = document.getElementById('chart-' + insightId);
+      if (chartDom) {
+        const myChart = echarts.init(chartDom);
+        myChart.setOption(chartRes.chartOption);
+        window.addEventListener('resize', () => myChart.resize());
+      }
+    });
+
+    ElMessage.success('自助式智能分析完成！');
+
+  } catch (err) {
+    if(err.message.includes('未配置')) openAiConfigDialog();
+    else ElMessage.error(err.message);
+  } finally {
+    insightLoading.value = false;
+  }
+};
+
+
+
+// ================= 🔴 终极防白屏与错误诊断拦截器 =================
+// 1. 拦截 Vue 组件渲染报错（最容易导致彻底白屏的原因）
+onErrorCaptured((err, instance, info) => {
+  ElNotification({
+    title: 'Vue 渲染崩溃拦截',
+    message: err.message,
+    type: 'error',
+    duration: 0 // 持续显示不自动关闭
+  });
+  console.error('【Vue 报错详情】', err, info);
+  return false; // 阻止错误继续往上抛，保护其他 UI 不白屏
+});
+
+// 2. 拦截系统级 JS 错误（比如变量未定义、组件没找到）
+window.addEventListener('error', (event) => {
+  ElNotification({
+    title: '系统级 JS 错误',
+    message: event.message,
+    type: 'error',
+    duration: 0
+  });
+});
+
+// 3. 拦截未捕获的异步/IPC 错误（比如后端接口没挂载）
+window.addEventListener('unhandledrejection', (event) => {
+  ElNotification({
+    title: '异步或 IPC 接口错误',
+    message: event.reason?.message || '未知异步错误',
+    type: 'error',
+    duration: 0
+  });
+});
+// ==============================================================
+
 </script>
 
 <style scoped>

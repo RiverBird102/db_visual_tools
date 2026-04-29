@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   generateInsight: (data) => ipcRenderer.invoke('ai:generate-insight', data),
   // 新增这一行
   askQuestion: (question) => ipcRenderer.invoke('ai:ask-question', question),
+
+  getRelationships: (args) => ipcRenderer.invoke('db:get-relationships', args),
   
   // 错误处理
   onError: (callback) => ipcRenderer.on('error', (event, error) => callback(error))

@@ -294,3 +294,15 @@ ipcMain.handle('ai:generate-insight', async (event, dataRows) => {
     return { success: false, error: error.message };
   }
 });
+
+// 在 main.js 的元数据部分添加
+ipcMain.handle('db:get-relationships', async (event, { connectionId, schema }) => {
+  try {
+    const connections = store.get('db.connections', []);
+    const connection = connections.find(item => item.id === connectionId);
+    const data = await dbConnections.getRelationships(connection, { schema });
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});

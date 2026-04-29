@@ -323,6 +323,59 @@ async function getTableColumns(config, { schema, table } = {}) {
   });
 }
 
+
+// 在 config/db-config.js 中替换原有的方法
+async function getRelationships(connection, { schema }) {
+    let sql = "";
+    
+    if (connection.dbType === 'mysql') {
+      sql = `
+        SELECT 
+          TABLE_NAME as source_table, 
+          COLUMN_NAME as source_column, 
+          REFERENCED_TABLE_NAME as target_table, 
+          REFERENCED_COLUMN_NAME as target_column
+        FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+        WHERE TABLE_SCHEMA = '${schema}' AND REFERENCED_TABLE_NAME IS NOT NULL;
+      `;
+    } else {
+      // 针对达梦 (DM) / Oracle 等信创数据库的专属外键查询逻辑
+      // 达梦中的 OWNER 等同于 Schema 模式名
+      sql = `
+        SELECT
+            a.TABLE_NAME as "source_table",
+            b.COLUMN_NAME as "source_column",
+            c.TABLE_NAME as "target_table",
+            d.COLUMN_NAME as "target_column"
+        FROM
+            ALL_CONSTRAINTS a
+        JOIN ALL_CONS_COLUMNS b ON a.CONSTRAINT_NAME = b.CONSTRAINT_NAME AND a.OWNER = b.OWNER
+        JOIN ALL_CONSTRAINTS c ON a.R_CONSTRAINT_NAME = c.CONSTRAINT_NAME AND a.OWNER = c.OWNER
+        JOIN ALL_CONS_COLUMNS d ON c.CONSTRAINT_NAME = d.CONSTRAINT_NAME AND c.OWNER = d.OWNER
+        WHERE
+            a.CONSTRAINT_TYPE = 'R'
+            AND a.OWNER = '${schema}'
+      `;
+    }
+
+    try {
+      const res = await this.executeSql(connection, sql, schema);
+      const rows = res.rows || [];
+      
+      // 兼容性处理：达梦等数据库返回的字段名默认是大写的，这里强制映射为前端需要的小写字段
+      return rows.map(row => ({
+        source_table: row.source_table || row.SOURCE_TABLE,
+        source_column: row.source_column || row.SOURCE_COLUMN,
+        target_table: row.target_table || row.TARGET_TABLE,
+        target_column: row.target_column || row.TARGET_COLUMN
+      }));
+    } catch (e) {
+      console.error('获取表关联关系失败:', e);
+      return [];
+    }
+}
+
+
 /**
  * 执行SQL（支持判断 DML/DDL 并返回具体提示）
  */
@@ -423,10 +476,13 @@ async function executeSql(connectionConfig, sql, targetSchema) {
   throw new Error(`暂不支持的数据库类型: ${dbType}`);
 }
 
+
+
 module.exports = {
   testConnection,
   executeSql,
   listSchemas,
   listTables,
-  getTableColumns
+  getTableColumns,
+  getRelationships
 };
