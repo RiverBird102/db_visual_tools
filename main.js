@@ -275,10 +275,64 @@ ipcMain.handle('ai:analyze-query', async (event, { sql, explainPlan, columns }) 
   }
 });
 
-// AI 智能生成测试数据
-ipcMain.handle('ai:generate-mock-data', async (event, { tableName, columns, count, instruction }) => {
+// AI 智能生成测试数据 (增强版：自动外键约束注入)
+ipcMain.handle('ai:generate-mock-data', async (event, { connectionId, schema, tableName, columns, count, instruction }) => {
   try {
-    const result = await aiService.generateMockData(tableName, columns, count, instruction);
+    // 1. 获取当前数据库连接
+    const connections = store.get('db.connections', []);
+    const connection = connections.find(item => item.id === connectionId);
+    
+    let finalInstruction = instruction || '';
+
+    // 如果前端传了连接信息，我们就可以去查外键上下文
+    if (connection) {
+      try {
+        // 调用 db-config.js 中已经写好的获取表关系接口
+        const relations = await dbConnections.getRelationships(connection, { schema });
+        
+        // 过滤出：当前正在造数的表，作为"子表"的所有外键记录
+        // 注意：达梦等信创数据库表名常常是全大写，所以转大写进行安全匹配
+        const foreignKeys = (relations || []).filter(r => 
+          r.source_table && r.source_table.toUpperCase() === String(tableName).toUpperCase()
+        );
+
+        if (foreignKeys.length > 0) {
+          finalInstruction += '\n\n【必须遵守的硬性外键约束】：';
+          
+          // 遍历每一个外键，去父表里取真实数据
+          for (const fk of foreignKeys) {
+            // 根据不同数据库方言，取前20条真实数据作为样本
+            let sql = `SELECT ${fk.target_column} FROM ${fk.target_table}`;
+            if (connection.dbType === 'dm' || connection.dbType === 'oracle') {
+              sql += ` WHERE ROWNUM <= 20`; // 达梦/Oracle 语法
+            } else {
+              sql += ` LIMIT 20`;          // MySQL/PG/人大金仓 语法
+            }
+
+            const queryRes = await dbConnections.executeSql(connection, sql, schema);
+            
+            if (queryRes.isQuery && queryRes.rows && queryRes.rows.length > 0) {
+              // 提取这批真实数据的值 (兼容达梦返回大写字段名的情况)
+              const validValues = queryRes.rows.map(row => {
+                const val = row[fk.target_column] || row[fk.target_column.toUpperCase()] || row[fk.target_column.toLowerCase()];
+                return typeof val === 'number' ? val : `'${val}'`; // 如果是字符串，加上单引号
+              }).filter(v => v !== undefined && v !== 'undefined');
+
+              if (validValues.length > 0) {
+                // 去重并拼接到要求中
+                const uniqueValues = [...new Set(validValues)];
+                finalInstruction += `\n- 字段 \`${fk.source_column}\` 的值必须严格且只能从以下集合中随机选取：[${uniqueValues.join(', ')}]，绝对不能自己编造其他值。`;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('AI造数预处理：获取外键真实数据失败，降级为常规造数模式', e.message);
+      }
+    }
+
+    // 2. 将强化后的最终要求（包含真实外键数据）传给 AI
+    const result = await aiService.generateMockData(tableName, columns, count, finalInstruction);
     return result;
   } catch (error) {
     return { success: false, error: error.message };

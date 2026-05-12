@@ -261,12 +261,12 @@
                   </div>
 
                   <div class="flex flex-col gap-6">
-                    <div class="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-6 rounded-2xl shadow-xl relative overflow-hidden flex-1">
-                      <Sparkles class="absolute top-[-20px] right-[-20px] opacity-10 w-40 h-40" />
-                      <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
+                    <div class="bg-gradient-to-br from-blue-600 to-indigo-700 text-white p-6 rounded-2xl shadow-xl relative overflow-hidden flex-1 flex flex-col max-h-[500px]">
+                      <Sparkles class="absolute top-[-20px] right-[-20px] opacity-10 w-40 h-40 pointer-events-none" />
+                      <h3 class="text-lg font-bold mb-4 flex items-center gap-2 shrink-0">
                         <Bot :size="22" /> 深度分析建议
                       </h3>
-                      <div class="text-sm leading-relaxed opacity-95 whitespace-pre-wrap font-medium">
+                      <div class="text-sm leading-relaxed opacity-95 whitespace-pre-wrap font-medium overflow-y-auto custom-scrollbar flex-1 relative z-10 pr-2">
                         {{ tab.analysis }}
                       </div>
                     </div>
@@ -810,15 +810,52 @@ const loadTableData = async (tab) => {
   } catch (e) { tab.error = e.message; } finally { tab.loading = false; }
 };
 
-const handleTableEdits = async (tab, edits) => {
+const handleTableEdits = async (tab, payload) => {
   tab.loading = true;
   try {
     const conn = getConnectionById(tab.connectionId);
     const colRes = await window.electronAPI.getTableColumns({ connectionId: tab.connectionId, schema: tab.schema, table: tab.table });
     if (!colRes.success) throw new Error(colRes.error);
+    
+    // 获取主键，用于精准定位修改和删除的行
     const pkCols = colRes.data.filter(c => c.primaryKey).map(c => c.name);
-    if (pkCols.length === 0) throw new Error(`表没有主键，禁止编辑。`);
+    if (pkCols.length === 0) throw new Error(`表没有主键，为了数据安全禁止可视化编辑。`);
 
+    // 解析 DataViewer 传来的综合编辑对象 (做一下兼容，如果还是旧版数组格式就默认全是 updates)
+    const edits = Array.isArray(payload) ? payload : payload.updates || [];
+    const inserts = payload.inserts || [];
+    const deletes = payload.deletes || [];
+
+    // 处理表名的方言转义
+    const safeSchema = conn.dbType === 'mysql' ? `\`${tab.schema}\`` : `"${tab.schema}"`;
+    const safeTable = conn.dbType === 'mysql' ? `\`${tab.table}\`` : `"${tab.table}"`;
+    const tableName = `${safeSchema}.${safeTable}`;
+
+    // ================= 1. 执行删除 DELETE =================
+    for (const row of deletes) {
+      const whereClauses = pkCols.map(pk => {
+        const safePk = conn.dbType === 'mysql' ? `\`${pk}\`` : `"${pk}"`;
+        return `${safePk} = '${String(row[pk]).replace(/'/g, "''")}'`;
+      });
+      const sql = `DELETE FROM ${tableName} WHERE ${whereClauses.join(' AND ')}`;
+      const res = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql });
+      if (!res.success) throw new Error(`删除数据失败: ${res.error}`);
+    }
+
+    // ================= 2. 执行新增 INSERT =================
+    for (const row of inserts) {
+       // 过滤掉前端为了状态维护自动挂载的私有属性
+       const cols = Object.keys(row).filter(k => !k.startsWith('_'));
+       
+       const safeCols = cols.map(c => conn.dbType === 'mysql' ? `\`${c}\`` : `"${c}"`);
+       const vals = cols.map(c => row[c] === null || row[c] === '' ? 'NULL' : `'${String(row[c]).replace(/'/g, "''")}'`);
+       
+       const sql = `INSERT INTO ${tableName} (${safeCols.join(', ')}) VALUES (${vals.join(', ')})`;
+       const res = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql });
+       if (!res.success) throw new Error(`新增数据失败: ${res.error}`);
+    }
+
+    // ================= 3. 执行修改 UPDATE =================
     for (const edit of edits) {
       const { originalRow, updates } = edit;
       const setClauses = [];
@@ -827,20 +864,22 @@ const handleTableEdits = async (tab, edits) => {
         const safeCol = conn.dbType === 'mysql' ? `\`${col}\`` : `"${col}"`;
         setClauses.push(`${safeCol} = ${safeVal}`);
       }
-      const whereClauses = [];
-      for (const pk of pkCols) {
-        const safePkVal = `'${String(originalRow[pk]).replace(/'/g, "''")}'`;
+      const whereClauses = pkCols.map(pk => {
         const safePk = conn.dbType === 'mysql' ? `\`${pk}\`` : `"${pk}"`;
-        whereClauses.push(`${safePk} = ${safePkVal}`);
-      }
-      const tableName = conn.dbType === 'mysql' ? `\`${tab.schema}\`.\`${tab.table}\`` : `"${tab.schema}"."${tab.table}"`;
+        return `${safePk} = '${String(originalRow[pk]).replace(/'/g, "''")}'`;
+      });
       const sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')}`;
       const res = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql });
-      if (!res.success) throw new Error(`更新失败: ${res.error}`);
+      if (!res.success) throw new Error(`更新数据失败: ${res.error}`);
     }
-    ElMessage.success('修改成功');
-    await loadTableData(tab); 
-  } catch (err) { ElMessage.error(err.message); } finally { tab.loading = false; }
+
+    ElMessage.success('数据操作全部成功！');
+    await loadTableData(tab); // 重新加载刷新数据，清除高亮和新增标记
+  } catch (err) { 
+    ElMessage.error(`执行失败: ${err.message}`); 
+  } finally { 
+    tab.loading = false; 
+  }
 };
 
 const nextQueryIndex = ref(1);
@@ -1062,22 +1101,40 @@ const handleAiDiagnosis = async (tab) => {
 
 // 【AI 功能3】：智能数据模拟
 const openMockDataDialog = (tab) => { mockTargetTab.value = tab; mockForm.count = 20; showMockDialog.value = true; };
+
 const executeMockDataGeneration = async () => {
   mockGenerating.value = true;
   try {
     const tab = mockTargetTab.value;
+    
+    // 1. 获取表字段结构
     const colRes = await window.electronAPI.getTableColumns({ connectionId: tab.connectionId, schema: tab.schema, table: tab.table });
-    const aiRes = await window.electronAPI.generateMockData({ tableName: tab.table, columns: colRes.data, count: mockForm.count, instruction: mockForm.instruction });
+    
+    // 2. 调用 AI 造数（🔥 这里加上 connectionId 和 schema）
+    const aiRes = await window.electronAPI.generateMockData({ 
+      connectionId: tab.connectionId,  // 新增：把连接ID传给后端查外键
+      schema: tab.schema,              // 新增：把Schema传给后端查外键
+      tableName: tab.table, 
+      columns: colRes.data, 
+      count: mockForm.count, 
+      instruction: mockForm.instruction 
+    });
+    
     if (!aiRes.success) throw new Error(aiRes.error);
+    
+    // 3. 执行 AI 生成的 SQL 入库
     const execRes = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql: aiRes.sql });
     if (!execRes.success) throw new Error(execRes.error);
+    
     ElMessage.success('生成入库成功');
     showMockDialog.value = false;
-    loadTableData(tab);
+    loadTableData(tab); // 刷新表格数据
   } catch (err) {
     if(err.message.includes('未配置')) openAiConfigDialog();
     else ElMessage.error(err.message);
-  } finally { mockGenerating.value = false; }
+  } finally { 
+    mockGenerating.value = false; 
+  }
 };
 
 // 【AI 功能4】：自动化数据洞察 (生成可视化图表)
