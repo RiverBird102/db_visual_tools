@@ -206,7 +206,7 @@
                   
                   <div class="flex-1 overflow-hidden">
                     <div v-show="tab.bottomTab === 'result'" class="h-full">
-                      <data-viewer v-if="tab.result && tab.result.isQuery" :data="tab.result.rows" :columns="tab.result.fields" :loading="tab.loading"></data-viewer>
+                      <data-viewer v-if="tab.result && (tab.result.isQuery || tab.result.rows)" :data="tab.result.rows" :columns="tab.result.fields" :loading="tab.loading"></data-viewer>
                       <div v-else class="h-full flex items-center justify-center text-slate-400 text-sm">等待数据返回...</div>
                     </div>
 
@@ -289,6 +289,7 @@
                 :schema="tab.schema" 
                 :table="tab.table"
                 @sqlGenerated="(sql) => handleGeneratedSql(sql)"
+                @saveSuccess="handleDesignerSaveSuccess(tab)" 
               ></table-designer>
             </div>
             <div v-else-if="tab.type === 'er'" class="flex-1 flex flex-col h-full overflow-hidden bg-slate-50">
@@ -788,14 +789,36 @@ const loadTableData = async (tab) => {
   tab.error = '';
   try {
     const conn = getConnectionById(tab.connectionId);
+    
+    // 🌟 新增：强制拉取最新的列定义（防止 DDL 变更后，旧缓存导致列头错乱或数据无法编辑）
+    let latestFields = [];
+    try {
+      const colRes = await window.electronAPI.getTableColumns({ 
+        connectionId: tab.connectionId, 
+        schema: tab.schema, 
+        table: tab.table 
+      });
+      if (colRes.success) {
+        // 提取最新的字段名数组
+        latestFields = colRes.data.map(c => c.name);
+      }
+    } catch (err) {
+      console.warn("拉取最新表结构失败，将降级使用查询结果自带的 fields");
+    }
+
     const offset = (tab.currentPage - 1) * tab.pageSize;
     const sql = conn.dbType === 'mysql'
       ? `SELECT * FROM \`${tab.schema}\`.\`${tab.table}\` LIMIT ${tab.pageSize} OFFSET ${offset}`
       : `SELECT * FROM "${tab.schema}"."${tab.table}" LIMIT ${tab.pageSize} OFFSET ${offset}`;
     
     const result = await window.electronAPI.executeSql({ connectionId: tab.connectionId, sql });
+    
     if (result.success) {
-      tab.result = result.data || { rows: [], fields: [] };
+      // 🌟 核心修改：组装 result，如果成功拉到了最新表结构，就用最新的 fields 覆盖
+      tab.result = {
+        rows: result.data?.rows || [],
+        fields: latestFields.length > 0 ? latestFields : (result.data?.fields || [])
+      };
     } else {
       tab.error = result.error;
     }
@@ -803,11 +826,18 @@ const loadTableData = async (tab) => {
     const countSql = conn.dbType === 'mysql'
       ? `SELECT COUNT(*) as total FROM \`${tab.schema}\`.\`${tab.table}\``
       : `SELECT COUNT(*) as total FROM "${tab.schema}"."${tab.table}"`;
+      
     window.electronAPI.executeSql({ connectionId: tab.connectionId, sql: countSql }).then(cRes => {
-      if (cRes.success && cRes.data.rows.length > 0) tab.total = Number(cRes.data.rows[0].total || cRes.data.rows[0].TOTAL || Object.values(cRes.data.rows[0])[0] || 0);
+      if (cRes.success && cRes.data.rows.length > 0) {
+        tab.total = Number(cRes.data.rows[0].total || cRes.data.rows[0].TOTAL || Object.values(cRes.data.rows[0])[0] || 0);
+      }
     }).catch(()=>{});
 
-  } catch (e) { tab.error = e.message; } finally { tab.loading = false; }
+  } catch (e) { 
+    tab.error = e.message; 
+  } finally { 
+    tab.loading = false; 
+  }
 };
 
 const handleTableEdits = async (tab, payload) => {
@@ -948,22 +978,40 @@ const executeSqlForTab = async (tab) => {
   if (!sql) return ElMessage.warning('请输入 SQL');
   
   const startTime = Date.now();
-  tab.loading = true; tab.showBottomPanel = true; tab.error = '';
+  tab.loading = true; 
+  tab.showBottomPanel = true; 
+  tab.error = '';
+  
   try {
     const res = await window.electronAPI.executeSql({ connectionId: tab.connectionId, schema: tab.schema, sql });
     const duration = Date.now() - startTime;
+    
     if (res.success) {
-      tab.result = res.data;
+      // 1. 安全赋值，防止 res.data 为 null 导致后续判断报错
+      tab.result = res.data || {}; 
+      
+      // 2. 【核心修复】：防御性补全 isQuery 标识。
+      // 只要后端返回了 rows 数组，或者 SQL 语句是以 SELECT/WITH/SHOW 等查询关键字开头，我们就强制认为这是一个查询操作！
+      if (tab.result.rows || /^\s*(SELECT|WITH|SHOW|DESC|EXPLAIN)/i.test(sql)) {
+        tab.result.isQuery = true;
+      }
+      
+      // 3. 根据最终的 isQuery 标识决定底部展示哪个 Tab
       tab.bottomTab = tab.result.isQuery ? 'result' : 'message';
+      
       tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '成功' });
     } else {
-      tab.error = res.error; tab.bottomTab = 'message';
+      tab.error = res.error; 
+      tab.bottomTab = 'message';
       tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '失败' });
     }
   } catch(e) { 
-    tab.error = e.message; tab.bottomTab = 'message';
-    tab.history.unshift({ time: new Date().toLocaleString(), sql, duration: Date.now()-startTime, status: '失败' });
-  } finally { tab.loading = false; }
+    tab.error = e.message; 
+    tab.bottomTab = 'message';
+    tab.history.unshift({ time: new Date().toLocaleString(), sql, duration: Date.now() - startTime, status: '失败' });
+  } finally { 
+    tab.loading = false; 
+  }
 };
 
 const startDrag = (e, tab) => {
@@ -999,6 +1047,35 @@ const saveAiConfig = async () => {
     if (res.success) { ElMessage.success('保存成功'); showAiConfigDialog.value = false; }
     else throw new Error(res.error);
   } catch(e) { ElMessage.error(e.message); }
+};
+
+// App.vue 逻辑部分
+
+// App.vue 中的逻辑
+const handleDesignerSaveSuccess = async (designTab) => {
+  // 1. 刷新左侧树（防止表名改了侧边栏没变）
+  if (typeof loadConnections === 'function') {
+    await loadConnections(); 
+  }
+
+  // 2. 找到所有涉及该表的“数据预览”标签页，强制刷新
+  openTabs.value.forEach(tab => {
+    if (
+      tab.type === 'table' && 
+      tab.connectionId === designTab.connectionId && 
+      tab.schema === designTab.schema && 
+      tab.table === designTab.table
+    ) {
+      // 调用之前修改过的 loadTableData，它会先取最新 fields 再取数据
+      loadTableData(tab); 
+    }
+    
+    // 3. 如果是当前的“设计”标签页，确保其内部状态也同步（通常在组件内部处理了，这里做双保险）
+    if (tab.id === designTab.id) {
+       // 如果设计器里改了表名，这里要更新标签页的标题
+       tab.label = `设计: ${designTab.table}`;
+    }
+  });
 };
 
 // 【AI 功能1】：智能双模式交互 (隔离聊天记录)

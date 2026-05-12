@@ -10,59 +10,62 @@
       <el-button v-if="canDelete" type="danger" size="small" plain @click="deleteSelected" class="mr-2">🗑️ 删除选中行</el-button>
       <el-button v-if="canRestore" type="info" size="small" plain @click="restoreSelected" class="mr-3">↩️ 撤销删除</el-button>
       
-      <div style="flex-grow: 1;"></div> <el-tag v-if="hasModifications" type="warning" class="status-tag">⚠️ 您有未提交的修改</el-tag>
+      <div style="flex-grow: 1;"></div> 
+
+      <el-tag v-if="hasModifications" type="warning" class="status-tag">⚠️ 您有未提交的修改</el-tag>
       <el-button v-if="hasModifications" type="success" size="small" @click="submitChanges">✅ 提交保存 (生效到库)</el-button>
       <el-button v-if="hasModifications" size="small" type="danger" plain @click="discardChanges">放弃全部</el-button>
     </div>
 
-    <el-table
-      ref="tableRef"
-      v-if="!error"
-      :data="displayData"
-      v-loading="loading"
-      border
-      stripe
-      style="width: 100%; height: 100%;"
-      @cell-dblclick="handleCellDblclick"
-      :cell-class-name="getCellClassName"
-      :row-class-name="getRowClassName" 
-      @selection-change="handleSelectionChange"
-      height="100%"
-    >
-      <el-table-column v-if="editable" type="selection" width="50" align="center" fixed="left" />
-      
-      <el-table-column
-        v-for="(col, index) in columns"
-        :key="index"
-        :prop="col"
-        :label="col"
-        sortable
-        min-width="150"
+    <div class="table-wrapper">
+      <el-table
+        ref="tableRef"
+        v-if="!error"
+        :data="displayData"
+        v-loading="loading"
+        border
+        stripe
+        height="100%"
+        @cell-dblclick="handleCellDblclick"
+        :cell-class-name="getCellClassName"
+        :row-class-name="getRowClassName" 
+        @selection-change="handleSelectionChange"
+        style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" 
       >
-        <template #default="{ row, $index }">
-          <div v-if="isEditing($index, col)">
-            <el-input
-              v-model="editValue"
-              size="small"
-              :ref="el => setInputRef(el, $index, col)"
-              @blur="saveCell($index, col, row)"
-              @keyup.enter="saveCell($index, col, row)"
-            ></el-input>
-          </div>
-          <div v-else class="cell-content">
-            <span class="text-content" :class="{'is-null': row[col] === null}">
-              {{ formatDisplay(row[col]) }}
-            </span>
-            <el-button 
-              v-if="isLongText(row[col])" 
-              class="lob-btn" link type="primary" size="small" 
-              @click.stop="openLobViewer(row, col, $index)"
-            >👁️ 详情</el-button>
-          </div>
-        </template>
-      </el-table-column>
+        <el-table-column v-if="editable" type="selection" width="50" align="center" fixed="left" />
+        
+        <el-table-column
+          v-for="(col, index) in columns"
+          :key="index"
+          :prop="col"
+          :label="col"
+          sortable
+          min-width="150"
+        >
+          <template #default="{ row, $index }">
+            <div v-if="isEditing($index, col)">
+              <el-input
+                v-model="editValue"
+                size="small"
+                :ref="el => setInputRef(el, $index, col)"
+                @blur="saveCell($index, col, row)"
+                @keyup.enter="saveCell($index, col, row)"
+              ></el-input>
+            </div>
+            <div v-else class="cell-content">
+              <span class="text-content" :class="{'is-null': row[col] === null}">
+                {{ formatDisplay(row[col]) }}
+              </span>
+              <el-button 
+                v-if="isLongText(row[col])" 
+                class="lob-btn" link type="primary" size="small" 
+                @click.stop="openLobViewer(row, col, $index)"
+              >👁️ 详情</el-button>
+            </div>
+          </template>
+        </el-table-column>
       </el-table>
-
+    </div>
     <el-dialog v-model="lobDialogVisible" title="LOB / 长文本内容编辑器" width="60%">
       <el-input v-model="lobContent" type="textarea" :rows="18" :readonly="!editable"></el-input>
       <template #footer>
@@ -333,13 +336,17 @@ const saveLob = () => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  overflow: hidden; /* 防止父容器被撑破 */
 }
+
 .error-msg {
   padding: 10px;
   color: #f56c6c;
   background-color: #fef0f0;
   border-radius: 4px;
+  flex-shrink: 0;
 }
+
 .edit-toolbar {
   display: flex;
   align-items: center;
@@ -347,7 +354,16 @@ const saveLob = () => {
   background-color: #f5f7fa;
   border: 1px solid var(--el-border-color);
   border-bottom: none;
+  flex-shrink: 0; /* 核心：防止工具栏在空间不够时被挤压消失 */
 }
+
+.table-wrapper {
+  flex: 1;
+  position: relative; /* ✨ 关键魔法：充当表格绝对定位的父级锚点 ✨ */
+  min-height: 0;
+  width: 100%;
+}
+
 .status-tag {
   margin-right: 15px;
   font-weight: bold;
@@ -371,9 +387,8 @@ const saveLob = () => {
   flex-shrink: 0;
 }
 
-/* 核心特效：高亮被修改的单元格 */
 :deep(.cell-modified) {
-  background-color: #fdf6ec !important; /* 浅橙色背景 */
+  background-color: #fdf6ec !important;
   position: relative;
 }
 :deep(.cell-modified::before) {
@@ -383,17 +398,16 @@ const saveLob = () => {
   left: 0;
   width: 0;
   height: 0;
-  border-top: 8px solid #e6a23c; /* 左上角小三角标记 */
+  border-top: 8px solid #e6a23c;
   border-right: 8px solid transparent;
 }
 
-/* 新增不同状态行的颜色提示 */
 :deep(.row-deleted-style td) {
   text-decoration: line-through;
   color: #909399;
   background-color: #f5f7fa !important;
 }
 :deep(.row-new-style td) {
-  background-color: #f0f9eb !important; /* 浅绿色提示这是新增行 */
+  background-color: #f0f9eb !important;
 }
 </style>

@@ -275,7 +275,7 @@ ipcMain.handle('ai:analyze-query', async (event, { sql, explainPlan, columns }) 
   }
 });
 
-// AI 智能生成测试数据 (增强版：自动外键约束注入)
+// AI 智能生成测试数据 (增强版：自动外键约束注入 + 唯一性防冲突)
 ipcMain.handle('ai:generate-mock-data', async (event, { connectionId, schema, tableName, columns, count, instruction }) => {
   try {
     // 1. 获取当前数据库连接
@@ -291,7 +291,6 @@ ipcMain.handle('ai:generate-mock-data', async (event, { connectionId, schema, ta
         const relations = await dbConnections.getRelationships(connection, { schema });
         
         // 过滤出：当前正在造数的表，作为"子表"的所有外键记录
-        // 注意：达梦等信创数据库表名常常是全大写，所以转大写进行安全匹配
         const foreignKeys = (relations || []).filter(r => 
           r.source_table && r.source_table.toUpperCase() === String(tableName).toUpperCase()
         );
@@ -301,7 +300,6 @@ ipcMain.handle('ai:generate-mock-data', async (event, { connectionId, schema, ta
           
           // 遍历每一个外键，去父表里取真实数据
           for (const fk of foreignKeys) {
-            // 根据不同数据库方言，取前20条真实数据作为样本
             let sql = `SELECT ${fk.target_column} FROM ${fk.target_table}`;
             if (connection.dbType === 'dm' || connection.dbType === 'oracle') {
               sql += ` WHERE ROWNUM <= 20`; // 达梦/Oracle 语法
@@ -312,14 +310,12 @@ ipcMain.handle('ai:generate-mock-data', async (event, { connectionId, schema, ta
             const queryRes = await dbConnections.executeSql(connection, sql, schema);
             
             if (queryRes.isQuery && queryRes.rows && queryRes.rows.length > 0) {
-              // 提取这批真实数据的值 (兼容达梦返回大写字段名的情况)
               const validValues = queryRes.rows.map(row => {
                 const val = row[fk.target_column] || row[fk.target_column.toUpperCase()] || row[fk.target_column.toLowerCase()];
-                return typeof val === 'number' ? val : `'${val}'`; // 如果是字符串，加上单引号
+                return typeof val === 'number' ? val : `'${val}'`;
               }).filter(v => v !== undefined && v !== 'undefined');
 
               if (validValues.length > 0) {
-                // 去重并拼接到要求中
                 const uniqueValues = [...new Set(validValues)];
                 finalInstruction += `\n- 字段 \`${fk.source_column}\` 的值必须严格且只能从以下集合中随机选取：[${uniqueValues.join(', ')}]，绝对不能自己编造其他值。`;
               }
@@ -331,7 +327,22 @@ ipcMain.handle('ai:generate-mock-data', async (event, { connectionId, schema, ta
       }
     }
 
-    // 2. 将强化后的最终要求（包含真实外键数据）传给 AI
+    // ================= 🌟 新增：处理唯一性约束 / 主键冲突防护 =================
+    // 提取当前表的主键列名
+    const pkNames = (columns || []).filter(c => c.primaryKey).map(c => c.name);
+
+    finalInstruction += `\n\n【防冲突与唯一性强制要求】：`;
+
+    if (pkNames.length > 0) {
+      finalInstruction += `\n1. 明确已知表的主键是 [${pkNames.join(', ')}]。为了防止 INSERT 时主键冲突，绝对不能生成常规的小数字（如 1,2,3）！
+   - 如果主键是整数类型，请生成 1000000 到 99999999 之间的超大随机数。
+   - 如果主键是字符串类型，请使用类似 UUID 或带当前时间戳的超长随机字符串。`;
+    }
+
+    finalInstruction += `\n2. 对于通常要求唯一的业务字段（例如 username, account, email, phone, id_card, code 等），千万不要生成诸如 'test'、'admin' 这样大众化的死数据！请务必在生成的内容中追加 4-6 位随机数字后缀（例如：'user_82739', 'test_mail_9921@xx.com'），以此保证数据在全表中的绝对唯一性！`;
+    // =========================================================================
+
+    // 2. 将强化后的最终要求（包含真实外键数据和唯一性规则）传给 AI
     const result = await aiService.generateMockData(tableName, columns, count, finalInstruction);
     return result;
   } catch (error) {

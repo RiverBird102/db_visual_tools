@@ -253,16 +253,31 @@ async function getTableColumns(config, { schema, table } = {}) {
           ORDER BY a.attnum`,
         [sch, table]
       );
-      return result.rows.map(r => ({
-        name: r.name,
-        dataType: r.fullType,
-        length: null,
-        scale: null,
-        notNull: String(r.isNullable).toUpperCase() === 'NO',
-        defaultValue: r.defaultValue,
-        primaryKey: !!r.primaryKey,
-        autoIncrement: typeof r.defaultValue === 'string' && r.defaultValue.includes('nextval(')
-      }));
+      
+      return result.rows.map(r => {
+        // 🌟 核心修改区域：智能拆分 PG 系数据库的类型和精度
+        let typeName = r.fullType || '';
+        let parsedLen = null;
+        
+        // 匹配类似 "character varying(255)" 或 "numeric(10,2)"
+        // 正则解释：匹配字母/下划线/空格，然后匹配括号里的内容
+        const match = typeName.match(/^([a-zA-Z_\s]+)\(([^)]+)\)/);
+        if (match) {
+          typeName = match[1].trim();     // 拿到干净的类型，例如 "character varying"
+          parsedLen = match[2].trim();    // 拿到纯精度，例如 "255" 或 "10,2"
+        }
+
+        return {
+          name: r.name,
+          dataType: typeName.toUpperCase(), // 统一转大写，方便前端下拉框匹配
+          length: parsedLen,                // 🎯 填入解析好的真实精度，不再写死 null！
+          scale: null,
+          notNull: String(r.isNullable).toUpperCase() === 'NO',
+          defaultValue: r.defaultValue,
+          primaryKey: !!r.primaryKey,
+          autoIncrement: typeof r.defaultValue === 'string' && r.defaultValue.includes('nextval(')
+        };
+      });
     }
 
     if (dbType === 'dm') {
