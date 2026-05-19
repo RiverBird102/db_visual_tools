@@ -47,6 +47,9 @@
               <span class="hidden group-hover:flex items-center gap-1 shrink-0" @click.stop v-if="data.type === 'table'">
                 <button @click.stop="openDesignTab(data)" class="text-blue-500 hover:text-blue-700 p-1" title="设计表结构"><Edit3 :size="14" /></button>
               </span>
+              <button @click.stop="openTablespaceTab(data)" class="text-purple-500 hover:text-purple-700 p-1" title="物理存储洞察(信创特有)">
+                <Database :size="12" />
+              </button>
             </div>
           </template>
         </el-tree>
@@ -95,6 +98,18 @@
           <el-tag v-if="activeConnection" effect="plain" class="border-blue-200 text-blue-600 bg-blue-50">
             <span class="flex items-center gap-1"><Zap :size="12"/> {{ activeConnection.name }}</span>
           </el-tag>
+          <!-- 【新增】：信创合规身份标识 -->
+          <el-tag 
+            v-if="currentRole && currentRole !== 'NORMAL'" 
+            :type="roleTagType" 
+            effect="dark" 
+            class="border-none shadow-sm"
+          >
+            <span class="flex items-center gap-1">
+              <Shield :size="12"/> 
+              {{ currentRole === 'AUDITOR' ? '审计管理员 (AUDITOR)' : currentRole === 'DBA' ? '超级管理员 (DBA)' : currentRole === 'SSO' ? '安全保密员 (SSO)' : currentRole }}
+            </span>
+          </el-tag>
           <span v-if="activeTable" class="text-sm text-slate-500 flex items-center gap-1">
             <Database :size="12"/> {{ activeSchema }} <span class="text-slate-300">/</span> <TableIcon :size="12"/> {{ activeTable }}
           </span>
@@ -117,14 +132,25 @@
           <el-tab-pane
             v-for="tab in openTabs"
             :key="tab.id"
-            :label="tab.title"
             :name="tab.id"
             closable
             class="h-full flex flex-col"
           >
+            <!-- 【新增】：自定义 Tabs 标题插槽 -->
+            <template #label>
+              <span class="flex items-center gap-1">
+                {{ tab.title }}
+                <Lock 
+                  v-if="currentRole === 'AUDITOR' && (tab.type === 'table' || tab.type === 'query')" 
+                  :size="12" 
+                  class="text-red-500" 
+                  title="根据等保要求，审计员无权操作业务数据"
+                />
+              </span>
+            </template>
             <div v-if="tab.type === 'table'" class="flex flex-col h-full p-2">
               <div class="flex items-center gap-3 pb-2 border-b border-slate-100 mb-2">
-                <el-button type="primary" size="small" @click="loadTableData(tab)" :loading="tab.loading" class="shadow-sm">刷新数据</el-button>
+                <el-button type="primary" size="small" @click="loadTableData(tab)" :loading="tab.loading" :disabled="currentRole === 'AUDITOR'"  class="shadow-sm">刷新数据</el-button>
                 
                 <el-button type="success" size="small" @click="openMockDataDialog(tab)" class="shadow-sm bg-emerald-500 hover:bg-emerald-600 border-none">
                   <span class="flex items-center gap-1"><Dna :size="14"/> AI 智能造数</span>
@@ -148,9 +174,15 @@
                   :columns="tab.result.fields"
                   :loading="tab.loading"
                   :error="tab.error"
-                  :editable="true"
+                  :editable="currentRole !== 'AUDITOR'"
                   @submit-edits="handleTableEdits(tab, $event)"
                 ></data-viewer>
+                <!-- 【新增】：审计员的数据遮罩层 -->
+                <div v-if="currentRole === 'AUDITOR'" class="absolute inset-0 bg-slate-100/60 backdrop-blur-[1px] flex items-center justify-center z-10">
+                  <div class="bg-white px-4 py-3 rounded shadow border border-red-100 text-red-500 flex items-center gap-2">
+                    <Lock :size="16"/> 三权分立合规限制：审计员禁止查看/修改业务数据
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -164,8 +196,12 @@
                 </el-select>
                 <button @click="refreshSchemaList(tab)" class="p-1 hover:bg-slate-100 rounded text-slate-500"><RefreshCw :size="14"/></button>
                 
-                <el-button type="primary" size="small" @click="executeSqlForTab(tab)" :loading="tab.loading" class="ml-2 shadow-sm">
+                <el-button type="primary" size="small" @click="executeSqlForTab(tab)" :loading="tab.loading" :disabled="currentRole === 'AUDITOR'" class="ml-2 shadow-sm">
                   <span class="flex items-center gap-1"><Play :size="12"/> 执行查询</span>
+                </el-button>
+
+                <el-button type="success" plain size="small" @click="handleAiTuning(tab)" class="shadow-sm">
+                  <span class="flex items-center gap-1"><Sparkles :size="12" /> AI 信创调优</span>
                 </el-button>
 
                 <el-button type="warning" size="small" @click="handleAiDiagnosis(tab)" class="shadow-sm bg-amber-500 hover:bg-amber-600 border-none">
@@ -206,7 +242,12 @@
                   
                   <div class="flex-1 overflow-hidden">
                     <div v-show="tab.bottomTab === 'result'" class="h-full">
-                      <data-viewer v-if="tab.result && (tab.result.isQuery || tab.result.rows)" :data="tab.result.rows" :columns="tab.result.fields" :loading="tab.loading"></data-viewer>
+                      <data-viewer 
+                        v-if="tab.result && (tab.result.isQuery || tab.result.rows)" 
+                        :data="tab.result.rows || []" 
+                        :columns="tab.result.fields || []" 
+                        :loading="tab.loading"
+                      ></data-viewer>
                       <div v-else class="h-full flex items-center justify-center text-slate-400 text-sm">等待数据返回...</div>
                     </div>
 
@@ -294,6 +335,44 @@
             </div>
             <div v-else-if="tab.type === 'er'" class="flex-1 flex flex-col h-full overflow-hidden bg-slate-50">
               <ERDiagram :connection-id="tab.connectionId" :schema="tab.schema"></ERDiagram>
+            </div>
+            <div v-else-if="tab.type === 'tablespace'" class="h-full flex flex-col p-4 bg-gray-50" v-loading="tab.loading">
+              <div class="mb-4">
+                <h2 class="text-xl font-bold text-gray-800 flex items-center">
+                  <Database class="w-6 h-6 mr-2 text-blue-600" />
+                  信创数据库物理存储洞察 (Tablespace)
+                </h2>
+                <p class="text-gray-500 text-sm mt-1">直接下钻读取底层 V$TABLESPACE / pg_tablespace，绕过逻辑 Schema 展现真实的磁盘文件映射。</p>
+              </div>
+              
+              <div class="flex-1 flex gap-4 min-h-0">
+                <div class="w-1/3 bg-white rounded-lg shadow-sm border p-4 h-full">
+                  <div :id="'chart_' + tab.id" class="w-full h-full"></div>
+                </div>
+                
+                <div class="w-2/3 bg-white rounded-lg shadow-sm border h-full overflow-hidden flex flex-col">
+                  <el-table :data="tab.data" height="100%" border stripe>
+                    <el-table-column prop="tablespace_name" label="表空间名称" width="180" />
+                    <el-table-column prop="file_path" label="磁盘物理文件路径 (Path)" show-overflow-tooltip>
+                      <template #default="{row}">
+                        <code class="text-xs bg-gray-100 px-1 py-0.5 rounded text-blue-600">{{ row.file_path || '默认路径/系统接管' }}</code>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="total_mb" label="分配容量(MB)" width="150" align="right">
+                      <template #default="{row}">
+                        <span class="font-semibold">{{ Number(row.total_mb || 0).toFixed(2) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="free_mb" label="空闲容量(MB)" width="150" align="right">
+                      <template #default="{row}">
+                        <span :class="row.free_mb < 50 ? 'text-red-500 font-bold' : 'text-green-600'">
+                          {{ row.free_mb ? Number(row.free_mb).toFixed(2) : '不支持统计' }}
+                        </span>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </div>
             </div>
           </el-tab-pane>
         </el-tabs>
@@ -500,6 +579,10 @@ const chatMode = ref('sql'); // 【新增】：当前聊天模式，默认为 's
 const sqlChatHistory = ref([]);
 const qaChatHistory = ref([]);
 
+// ================= UI 基础状态 =================
+const currentRole = ref('DBA');
+const roleCache = reactive({}); // 【新增】：缓存每个连接的角色 { connectionId: 'DBA' | 'AUDITOR' | 'NORMAL' }
+
 // 【新增】：使用 computed 动态返回当前激活的聊天记录
 const currentChatHistory = computed(() => {
   return chatMode.value === 'sql' ? sqlChatHistory.value : qaChatHistory.value;
@@ -575,12 +658,53 @@ const loadTreeNode = async (node, resolve) => {
   return resolve([]);
 };
 
-const handleNodeClick = (data) => {
-  if (data.connectionId || data.id) activeConnection.value = getConnectionById(data.connectionId || data.id);
+// 替换原有的 handleNodeClick 方法
+const handleNodeClick = async (data) => {
+  const conn = getConnectionById(data.connectionId || data.id);
+  
+  if (conn && (!activeConnection.value || activeConnection.value.id !== conn.id)) {
+    activeConnection.value = conn;
+    
+    // 【修改点】：优先从缓存读取角色，没有才发请求
+    if (roleCache[conn.id]) {
+      currentRole.value = roleCache[conn.id];
+    } else {
+      try {
+        const roleRes = await window.electronAPI.getXinchuangRole({ connectionId: conn.id });
+        if (roleRes.success) {
+          roleCache[conn.id] = roleRes.data.role; // 存入缓存
+          currentRole.value = roleRes.data.role;
+          
+          if (currentRole.value === 'AUDITOR') {
+            ElNotification({
+              title: '信创等保合规拦截',
+              message: `${roleRes.data.message}。根据三权分立原则，已为您禁用业务数据查询与 SQL 执行权限。`,
+              type: 'warning',
+              duration: 8000
+            });
+          } else if (roleRes.data.role !== 'NORMAL') {
+            ElMessage.success(roleRes.data.message);
+          }
+        }
+      } catch (e) {
+        console.warn("信创安全探针执行失败:", e);
+        roleCache[conn.id] = 'NORMAL'; // 失败兜底
+        currentRole.value = 'NORMAL';
+      }
+    }
+  }
+
+  // 2. 原有的节点展开逻辑 + 审计员越权拦截
   if (data.type === 'schema') {
     activeSchema.value = data.schemaName;
     activeTable.value = '';
   } else if (data.type === 'table') {
+    // 【新增拦截】：审计管理员严禁查看业务表！
+    if (currentRole.value === 'AUDITOR') {
+      ElMessage.error('信创安全拦截：审计管理员 (SYSAUDITOR) 无权查看业务表数据！');
+      return; 
+    }
+
     activeSchema.value = data.schemaName;
     activeTable.value = data.tableName;
     const id = `table_${data.connectionId}_${data.schemaName}_${data.tableName}`;
@@ -603,6 +727,32 @@ const saveConnection = async (connection) => {
       connection.id = currentEditData.value.id;
       if (window.electronAPI.disconnectDb) await window.electronAPI.disconnectDb(connection.id);
       result = await window.electronAPI.updateDbConnection(JSON.parse(JSON.stringify(connection)));
+      
+      // ================= 【核心修复：连接配置变更后的状态失效与清理】 =================
+      if (result.success) {
+        // 1. 如果使用了角色缓存字典，必须清空该连接的老旧身份缓存
+        if (typeof roleCache !== 'undefined' && roleCache[connection.id]) {
+          delete roleCache[connection.id];
+        }
+        
+        // 2. 如果当前被修改的连接刚好是激活的连接，强制重置其激活状态与全局角色
+        // 这样可以迫使用户下一次点击该连接时，重新、全量地触发底层的信创安全探针
+        if (activeConnection.value && activeConnection.value.id === connection.id) {
+          activeConnection.value = null;
+          currentRole.value = 'NORMAL'; // 重置回放行的通用身份
+          activeSchema.value = '';
+          activeTable.value = '';
+        }
+        
+        // 3. 强力清理：关闭该连接目前在右侧已经打开的所有 Tab（数据表、SQL执行器等）
+        // 防止用户用旧的会话去操作已经更改了账号的数据库，导致白屏或权限报错
+        openTabs.value = openTabs.value.filter(t => t.connectionId !== connection.id);
+        if (!openTabs.value.find(t => t.id === activeTab.value)) {
+          activeTab.value = openTabs.value[0]?.id || '';
+        }
+      }
+      // =========================================================================
+      
     } else {
       connection.id = Date.now().toString();
       result = await window.electronAPI.saveDbConnection(JSON.parse(JSON.stringify(connection)));
@@ -613,7 +763,6 @@ const saveConnection = async (connection) => {
     loadConnections(); 
   } catch (err) { ElMessage.error(err.message); }
 };
-
 const deleteConnection = async (data) => {
   try {
     await ElMessageBox.confirm(`确定删除 "${data.name}" 吗？`, '警告', { type: 'warning' });
@@ -634,6 +783,71 @@ const testConnection = async (config) => {
     if (res.success) ElMessage.success('连接测试成功');
     else throw new Error(res.error);
   } catch(e) { ElMessage.error(`测试失败: ${e.message}`); } finally { loading.value = false; }
+};
+
+// 打开物理存储面板
+const openTablespaceTab = async (connData) => {
+  const conn = getConnectionById(connData.connectionId || connData.id);
+  if (!conn) return;
+  
+  if (conn.dbType === 'mysql') {
+    ElMessage.warning('系统探针：通用数据库(MySQL)不支持底层的物理表空间透视，请连接信创数据库。');
+    return;
+  }
+  
+  const id = `tablespace_${conn.id}`;
+  if (!openTabs.value.find(t => t.id === id)) {
+    const tab = {
+      id, type: 'tablespace', title: `信创物理存储: ${conn.name}`, 
+      connectionId: conn.id, loading: true, data: []
+    };
+    openTabs.value.push(tab);
+    activeTab.value = id;
+
+    try {
+      const res = await window.electronAPI.getTablespace({ connectionId: conn.id });
+      if (res.success) {
+        tab.data = res.data;
+        // 等待 DOM 渲染完成后初始化 ECharts
+        nextTick(() => initTablespaceChart(id, res.data));
+      } else {
+        throw new Error(res.error);
+      }
+    } catch(e) {
+      ElMessage.error(`获取物理视图失败: ${e.message}`);
+    } finally {
+      tab.loading = false;
+    }
+  } else {
+    activeTab.value = id;
+  }
+};
+
+// 初始化表空间容量饼图
+const initTablespaceChart = (tabId, data) => {
+  const dom = document.getElementById(`chart_${tabId}`);
+  if (!dom) return;
+  const myChart = echarts.init(dom);
+  
+  const seriesData = data.map(item => ({
+    name: item.tablespace_name,
+    value: Number(item.total_mb || 0).toFixed(2)
+  }));
+  
+  myChart.setOption({
+    title: { text: '底层物理文件容量分布', left: 'center', top: '10' },
+    tooltip: { trigger: 'item', formatter: '{b}: {c} MB ({d}%)' },
+    legend: { orient: 'vertical', left: 'left', top: 'bottom' },
+    series: [{
+      type: 'pie',
+      radius: ['40%', '70%'],
+      avoidLabelOverlap: false,
+      itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 2 },
+      label: { show: false, position: 'center' },
+      emphasis: { label: { show: true, fontSize: '20', fontWeight: 'bold' } },
+      data: seriesData
+    }]
+  });
 };
 
 
@@ -690,22 +904,30 @@ onUnmounted(() => {
   document.removeEventListener('click', closeContextMenu);
 });
 
-// 分发右键菜单的具体点击指令
+// 修改原有的 handleContextAction 方法
 const handleContextAction = async (action) => {
   const data = contextMenu.nodeData;
   closeContextMenu(); // 执行操作前先隐藏菜单
+  
+  // 【新增拦截】：定义需要权限控制的操作，遇到审计员直接阻断
+  const requireDataAuth = ['newTable', 'openTable', 'designTable', 'truncateTable', 'dropTable'];
+  if (requireDataAuth.includes(action) && currentRole.value === 'AUDITOR') {
+     ElMessage.error('信创安全拦截：根据等保三权分立，审计员无权进行此数据操作！');
+     return;
+  }
   
   switch (action) {
     case 'editConn': openEditDialog(data); break;
     case 'deleteConn': deleteConnection(data); break;
     case 'refreshConn': loadConnections(); break;
-    case 'refreshSchema': loadConnections(); break; // 这里简化为重载整棵树，你后续可以优化为单节点重载
+    case 'refreshSchema': loadConnections(); break; 
     case 'newTable': openDesignTab({ connectionId: data.connectionId, schemaName: data.schemaName, tableName: '' }); break;
     case 'openTable': handleNodeClick(data); break;
     case 'designTable': openDesignTab(data); break;
     case 'truncateTable': doTruncateTable(data); break;
     case 'dropTable': doDropTable(data); break;
     case 'showER': openERTab(data); break;
+    case 'viewTablespace': openTablespaceTab(data); break; // <--- 新增这行，当点击右键菜单时触发
   }
 };
 
@@ -913,8 +1135,16 @@ const handleTableEdits = async (tab, payload) => {
 };
 
 const nextQueryIndex = ref(1);
+// 修改原有的 addQueryTab 方法
 const addQueryTab = () => {
   if (!activeConnection.value) return;
+
+  // 【新增拦截】：审计管理员严禁执行自定义 SQL！
+  if (currentRole.value === 'AUDITOR') {
+    ElMessage.error('信创安全拦截：审计管理员 (SYSAUDITOR) 仅限于审计功能，无权打开 SQL 执行器！');
+    return;
+  }
+
   const id = `query-${Date.now()}`;
   const newTab = {
     id, type: 'query', title: `查询 ${nextQueryIndex.value++}`,
@@ -932,15 +1162,77 @@ const addQueryTab = () => {
 const removeTab = (id) => {
   const idx = openTabs.value.findIndex(t => t.id === id);
   openTabs.value.splice(idx, 1);
-  if (activeTab.value === id) activeTab.value = openTabs.value[idx]?.id || openTabs.value[idx-1]?.id || '';
+  if (activeTab.value === id) {
+    const nextTabId = openTabs.value[idx]?.id || openTabs.value[idx-1]?.id || '';
+    activeTab.value = nextTabId;
+    
+    // 【新增】：关闭 Tab 后如果还有其他 Tab，强制同步一下角色状态
+    if (nextTabId) {
+      handleTabChange(nextTabId);
+    } else {
+      currentRole.value = 'NORMAL'; // 全部关完，重置状态
+    }
+  }
 };
 
 const handleTabChange = (tabId) => {
   const tab = openTabs.value.find(t => t.id === tabId);
   if (tab) {
     activeConnection.value = getConnectionById(tab.connectionId);
-    if (tab.type === 'table') { activeSchema.value = tab.schema; activeTable.value = tab.table; }
-    else { activeSchema.value = tab.schema || ''; activeTable.value = ''; }
+    if (tab.type === 'table') { 
+      activeSchema.value = tab.schema; 
+      activeTable.value = tab.table; 
+    } else { 
+      activeSchema.value = tab.schema || ''; 
+      activeTable.value = ''; 
+    }
+    
+    // 【新增】：根据当前 Tab 所属的连接，无缝切换 UI 的加锁状态
+    if (tab.connectionId && roleCache[tab.connectionId]) {
+      currentRole.value = roleCache[tab.connectionId];
+    } else if (tab.connectionId) {
+      // 极端情况兜底：如果缓存里没有，去查一次
+      window.electronAPI.getXinchuangRole({ connectionId: tab.connectionId }).then(res => {
+        if(res.success) {
+          roleCache[tab.connectionId] = res.data.role;
+          currentRole.value = res.data.role;
+        }
+      }).catch(()=>{});
+    }
+  }
+};
+
+const handleAiTuning = async (tab) => {
+  const sql = tab.sql || '';
+  if (!sql) return ElMessage.warning('请先输入需要分析的 SQL');
+  
+  tab.loading = true;
+  try {
+    const res = await window.electronAPI.smartTuning({
+      connectionId: tab.connectionId,
+      schema: tab.schema,
+      sql: sql
+    });
+    
+    if (res.success) {
+      // 弹窗展示硬核的执行计划和 AI 分析报告
+      ElMessageBox.alert(
+        `<div style="max-height: 400px; overflow-y: auto;">
+          <h4 style="color: #3b82f6; margin-bottom: 8px;">底层执行计划 (Explain Plan):</h4>
+          <pre style="background: #f1f5f9; padding: 10px; font-size: 12px;">${res.plan}</pre>
+          <h4 style="color: #10b981; margin-top: 16px; margin-bottom: 8px;">AI 诊断与优化建议:</h4>
+          <div style="font-size: 14px; line-height: 1.6;">${res.analysis.replace(/\n/g, '<br>')}</div>
+        </div>`,
+        '信创数据库智能调优引擎',
+        { dangerouslyUseHTMLString: true, customStyle: { maxWidth: '800px' } }
+      );
+    } else {
+      throw new Error(res.error);
+    }
+  } catch(e) {
+    ElMessage.error(`分析失败: ${e.message}`);
+  } finally {
+    tab.loading = false;
   }
 };
 
@@ -987,18 +1279,29 @@ const executeSqlForTab = async (tab) => {
     const duration = Date.now() - startTime;
     
     if (res.success) {
-      // 1. 安全赋值，防止 res.data 为 null 导致后续判断报错
-      tab.result = res.data || {}; 
-      
-      // 2. 【核心修复】：防御性补全 isQuery 标识。
-      // 只要后端返回了 rows 数组，或者 SQL 语句是以 SELECT/WITH/SHOW 等查询关键字开头，我们就强制认为这是一个查询操作！
-      if (tab.result.rows || /^\s*(SELECT|WITH|SHOW|DESC|EXPLAIN)/i.test(sql)) {
-        tab.result.isQuery = true;
+      // 1. 安全初始化，防止 res.data 本身是 null
+      const resultData = res.data || {};
+      const rows = resultData.rows || [];
+      let fields = resultData.fields || [];
+
+      // 2. 【核心修复】：如果后端驱动没有返回 fields，我们手动从第一行数据中提取列名！
+      // 这一步完美解决更换不同数据库驱动时，表格一片空白的问题
+      if (fields.length === 0 && rows.length > 0) {
+        fields = Object.keys(rows[0]);
       }
-      
-      // 3. 根据最终的 isQuery 标识决定底部展示哪个 Tab
+
+      // 3. 强制赋予查询标识 (只要有数据，或者是 SELECT 开头，就是查询)
+      const isQuery = !!(rows.length > 0 || /^\s*(SELECT|WITH|SHOW|DESC|EXPLAIN)/i.test(sql));
+
+      // 4. 将拼装好的完整对象重新赋值给 tab.result，确保 Vue 响应式数据结构完整
+      tab.result = {
+        rows: rows,
+        fields: fields,
+        isQuery: isQuery
+      };
+
+      // 5. 切换底部面板
       tab.bottomTab = tab.result.isQuery ? 'result' : 'message';
-      
       tab.history.unshift({ time: new Date().toLocaleString(), sql, duration, status: '成功' });
     } else {
       tab.error = res.error; 
@@ -1008,7 +1311,7 @@ const executeSqlForTab = async (tab) => {
   } catch(e) { 
     tab.error = e.message; 
     tab.bottomTab = 'message';
-    tab.history.unshift({ time: new Date().toLocaleString(), sql, duration: Date.now() - startTime, status: '失败' });
+    tab.history.unshift({ time: new Date().toLocaleString(), sql, duration: Date.now()-startTime, status: '失败' });
   } finally { 
     tab.loading = false; 
   }

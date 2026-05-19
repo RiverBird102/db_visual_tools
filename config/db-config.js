@@ -491,6 +491,106 @@ async function executeSql(connectionConfig, sql, targetSchema) {
   throw new Error(`暂不支持的数据库类型: ${dbType}`);
 }
 
+async function getXinchuangRole(config) {
+  return withConnection(config, async ({ dbType, conn }) => {
+    const user = String(config.username).toUpperCase();
+    let role = 'NORMAL'; // 默认普通用户
+    
+    if (dbType === 'dm') {
+      // 达梦的内置三权账号
+      if (user === 'SYSDBA') role = 'DBA';
+      else if (user === 'SYSSSO') role = 'SSO';
+      else if (user === 'SYSAUDITOR') role = 'AUDITOR';
+      return { user, role, message: `已识别达梦三权分立角色: ${role}` };
+    } 
+    
+    if (dbType === 'kingbase' || dbType === 'postgresql' || dbType === 'gauss') {
+      // 人大金仓/PG系 查询用户是否具有审计(AUDIT)或超级管理员权限
+      const res = await conn.query(`SELECT rolsuper, rolaudit FROM pg_authid WHERE rolname = $1`, [config.username]);
+      if (res.rows && res.rows.length > 0) {
+        if (res.rows[0].rolaudit) role = 'AUDITOR';
+        else if (res.rows[0].rolsuper) role = 'DBA';
+      }
+      return { user, role, message: `已识别人大金仓/PG系安全角色: ${role}` };
+    }
+    
+    return { user, role: 'DBA', message: '通用数据库环境，默认放行' };
+  });
+}
+
+/**
+ * 获取国产数据库的表空间及物理存储使用情况
+ */
+async function getTablespaceUsage(config) {
+  return withConnection(config, async ({ dbType, conn }) => {
+    if (dbType === 'dm') {
+      // 达梦专属：查询表空间物理文件及大小 (返回 MB)
+      const rows = await conn.query(`
+        SELECT 
+          t.NAME AS tablespace_name, 
+          d.PATH AS file_path, 
+          (d.TOTAL_SIZE * 8 / 1024) AS total_mb, 
+          (d.FREE_SIZE * 8 / 1024) AS free_mb
+        FROM V$TABLESPACE t 
+        JOIN V$DATAFILE d ON t.ID = d.GROUP_ID
+      `);
+      // 统一小写属性名，方便前端取值
+      return rows.map(r => ({
+        tablespace_name: r.TABLESPACE_NAME || r.NAME || r.tablespace_name,
+        file_path: r.FILE_PATH || r.PATH || r.file_path,
+        total_mb: r.TOTAL_MB || r.total_mb,
+        free_mb: r.FREE_MB || r.free_mb
+      }));
+    }
+    
+    if (dbType === 'kingbase' || dbType === 'postgresql' || dbType === 'gauss') {
+      // 人大金仓专属：查询表空间及物理路径，计算 MB
+      const res = await conn.query(`
+        SELECT 
+          spcname AS tablespace_name,
+          pg_catalog.pg_tablespace_location(oid) AS file_path,
+          (pg_tablespace_size(spcname) / 1048576.0) AS total_mb
+        FROM pg_tablespace
+      `);
+      return res.rows;
+    }
+    
+    throw new Error('通用数据库(如MySQL)不支持底层的物理表空间透视');
+  });
+}
+
+// 获取国产数据库的底层执行计划
+async function getExplainPlan(connectionConfig, sql, targetSchema) {
+  return withConnection(connectionConfig, async ({ dbType, conn }) => {
+    // 自动对用户的 SQL 追加 EXPLAIN 前缀
+    const explainSql = `EXPLAIN ${sql}`;
+    
+    if (dbType === 'dm') {
+      if (targetSchema) await conn.query(`SET SCHEMA "${targetSchema}"`);
+      const result = await conn.query(explainSql);
+      // 达梦的执行计划通常返回在单个字段中，提取纯文本
+      return result.map(r => Object.values(r)[0]).join('\n');
+    }
+    
+    if (dbType === 'kingbase' || dbType === 'postgresql' || dbType === 'gauss') {
+      if (targetSchema) await conn.query(`SET search_path TO "${targetSchema}"`);
+      const result = await conn.query(explainSql);
+      // 人大金仓的执行计划在 QUERY PLAN 字段中
+      return result.rows.map(r => r['QUERY PLAN']).join('\n');
+    }
+    
+    // MySQL 兼容
+    const [result] = await conn.query(explainSql);
+    return JSON.stringify(result, null, 2);
+  });
+}
+
+// 别忘了在 module.exports 中导出
+module.exports = {
+  // ... 其他原有导出
+  getExplainPlan 
+};
+
 
 
 module.exports = {
@@ -499,5 +599,8 @@ module.exports = {
   listSchemas,
   listTables,
   getTableColumns,
-  getRelationships
+  getRelationships,
+  getXinchuangRole,
+  getTablespaceUsage,
+  getExplainPlan
 };

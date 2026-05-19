@@ -350,6 +350,21 @@ ipcMain.handle('ai:generate-mock-data', async (event, { connectionId, schema, ta
   }
 });
 
+// ================= IPC通信 - 信创特性 =================
+ipcMain.handle('db:get-xinchuang-role', async (event, { connectionId }) => {
+  try {
+    if (!connectionId) throw new Error('connectionId不能为空');
+    const connections = store.get('db.connections', []);
+    const connection = connections.find(item => item.id === connectionId);
+    if (!connection) throw new Error('连接不存在');
+    
+    const data = await dbConnections.getXinchuangRole(connection);
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // AI 数据洞察
 ipcMain.handle('ai:generate-insight', async (event, dataRows) => {
   try {
@@ -367,6 +382,42 @@ ipcMain.handle('db:get-relationships', async (event, { connectionId, schema }) =
     const connection = connections.find(item => item.id === connectionId);
     const data = await dbConnections.getRelationships(connection, { schema });
     return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// main.js 的 IPC 通信区域新增
+ipcMain.handle('db:get-tablespace', async (event, { connectionId }) => {
+  try {
+    const connections = store.get('db.connections', []);
+    const connection = connections.find(item => item.id === connectionId);
+    if (!connection) throw new Error('连接不存在');
+    
+    const data = await dbConnections.getTablespaceUsage(connection);
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// main.js 的 IPC 通信区域新增：
+ipcMain.handle('ai:smart-tuning', async (event, { connectionId, schema, sql }) => {
+  try {
+    const connections = store.get('db.connections', []);
+    const connection = connections.find(item => item.id === connectionId);
+    
+    // 1. 获取底层专属执行计划
+    const explainPlan = await dbConnections.getExplainPlan(connection, sql, schema);
+    
+    // 2. 调用你 ai-service.js 里现成的分析方法 (暂时略过传入表结构，保持轻量)
+    const result = await aiService.analyzeSlowQuery(sql, explainPlan, "表结构略");
+    
+    if (result.success) {
+      return { success: true, plan: explainPlan, analysis: result.analysis };
+    } else {
+      throw new Error(result.error);
+    }
   } catch (error) {
     return { success: false, error: error.message };
   }

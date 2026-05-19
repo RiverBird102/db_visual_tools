@@ -29,6 +29,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   askQuestion: (question) => ipcRenderer.invoke('ai:ask-question', question),
 
   getRelationships: (args) => ipcRenderer.invoke('db:get-relationships', args),
+
+  getXinchuangRole: (args) => ipcRenderer.invoke('db:get-xinchuang-role', args),
+
+  getTablespace: (args) => ipcRenderer.invoke('db:get-tablespace', args),
   
   // 错误处理
   onError: (callback) => ipcRenderer.on('error', (event, error) => callback(error))
