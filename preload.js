@@ -33,6 +33,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getXinchuangRole: (args) => ipcRenderer.invoke('db:get-xinchuang-role', args),
 
   getTablespace: (args) => ipcRenderer.invoke('db:get-tablespace', args),
+
+  smartTuning: (args) => ipcRenderer.invoke('ai:smart-tuning', args),
+
+  // 在 contextBridge.exposeInMainWorld('electronAPI', { ... }) 中追加
+  getXinchuangAssets: (args) => ipcRenderer.invoke('db:get-xc-assets', args),
   
   // 错误处理
   onError: (callback) => ipcRenderer.on('error', (event, error) => callback(error))

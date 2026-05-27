@@ -585,11 +585,63 @@ async function getExplainPlan(connectionConfig, sql, targetSchema) {
   });
 }
 
-// 别忘了在 module.exports 中导出
-module.exports = {
-  // ... 其他原有导出
-  getExplainPlan 
-};
+/**
+ * 【信创三大铁证】：获取特有高级对象（增强兼容性与日志监控）
+ */
+async function getXinchuangAssets(config, { schema }) {
+  return withConnection(config, async ({ dbType, conn }) => {
+    const result = { sequences: [], packages: [], mviews: [] };
+
+    if (dbType === 'dm') {
+      const owner = String(schema || config.username || 'SYSDBA').toUpperCase();
+
+      // 铁证一：达梦序列
+      try {
+        const seqRes = await conn.query(`SELECT SEQUENCE_NAME, MIN_VALUE, MAX_VALUE, INCREMENT_BY FROM ALL_SEQUENCES WHERE SEQUENCE_OWNER = '${owner}'`);
+        // 兼容不同驱动返回的数据结构：可能是数组，也可能是 { rows: [...] }
+        const rows = Array.isArray(seqRes) ? seqRes : (seqRes.rows || []);
+        result.sequences = rows.map(r => ({ name: r.SEQUENCE_NAME, min: r.MIN_VALUE, max: r.MAX_VALUE, step: r.INCREMENT_BY }));
+      } catch (e) {
+        console.error("【信创探针-序列查询失败】:", e.message); // 把错误打印到 Node 控制台
+      }
+
+      // 铁证二：达梦包与逻辑
+      try {
+        const pkgRes = await conn.query(`SELECT OBJECT_NAME, TEXT FROM ALL_SOURCE WHERE TYPE IN ('PACKAGE', 'PACKAGE BODY', 'PROCEDURE') AND OWNER = '${owner}'`);
+        const rows = Array.isArray(pkgRes) ? pkgRes : (pkgRes.rows || []);
+        result.packages = rows.map(r => ({ name: r.OBJECT_NAME, text: r.TEXT }));
+      } catch(e) {
+        console.error("【信创探针-包逻辑查询失败】:", e.message);
+      }
+
+      // 铁证三：达梦物化视图
+      try {
+        const mvRes = await conn.query(`SELECT OBJECT_NAME FROM ALL_OBJECTS WHERE OBJECT_TYPE = 'MATERIALIZED VIEW' AND OWNER = '${owner}'`);
+        const rows = Array.isArray(mvRes) ? mvRes : (mvRes.rows || []);
+        result.mviews = rows.map(r => ({ name: r.OBJECT_NAME }));
+      } catch(e) {
+        console.error("【信创探针-物化视图查询失败】:", e.message);
+      }
+      
+    } else if (dbType === 'kingbase' || dbType === 'postgresql' || dbType === 'gauss') {
+      const safeSchema = schema || 'public';
+      
+      try {
+        const seqRes = await conn.query(`SELECT sequencename, min_value, max_value, increment_by FROM pg_sequences WHERE schemaname = '${safeSchema}'`);
+        const rows = Array.isArray(seqRes) ? seqRes : (seqRes.rows || []);
+        result.sequences = rows.map(r => ({ name: r.sequencename, min: r.min_value, max: r.max_value, step: r.increment_by }));
+      } catch(e) { console.error("【信创探针-金仓序列查询失败】:", e.message); }
+
+      try {
+        const mvRes = await conn.query(`SELECT matviewname FROM pg_matviews WHERE schemaname = '${safeSchema}'`);
+        const rows = Array.isArray(mvRes) ? mvRes : (mvRes.rows || []);
+        result.mviews = rows.map(r => ({ name: r.matviewname }));
+      } catch(e) { console.error("【信创探针-金仓视图查询失败】:", e.message); }
+    }
+
+    return result;
+  });
+}
 
 
 
@@ -602,5 +654,6 @@ module.exports = {
   getRelationships,
   getXinchuangRole,
   getTablespaceUsage,
-  getExplainPlan
+  getExplainPlan,
+  getXinchuangAssets
 };

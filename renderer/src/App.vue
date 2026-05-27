@@ -37,19 +37,21 @@
                 <TableIcon v-else-if="data.type === 'table'" :size="14" class="text-slate-400" />
                 <span class="truncate" :title="node.label">{{ node.label }}</span>
               </span>
+              
               <span class="hidden group-hover:flex items-center gap-1 shrink-0" @click.stop v-if="data.type === 'connection'">
+                <button @click.stop="openTablespaceTab(data)" class="text-purple-500 hover:text-purple-700 p-1" title="物理存储洞察(信创特有)"><Database :size="12" /></button>
                 <button @click.stop="openEditDialog(data)" class="text-blue-500 hover:text-blue-700 p-1"><Edit3 :size="12" /></button>
                 <button @click.stop="deleteConnection(data)" class="text-red-500 hover:text-red-700 p-1"><Trash2 :size="12" /></button>
               </span>
+              
               <span class="hidden group-hover:flex items-center gap-1 shrink-0" @click.stop v-if="data.type === 'schema'">
+                <button @click.stop="openXinchuangAssets(data)" class="text-purple-600 hover:text-purple-800 p-1" title="国产库专属资产(序列/包/物化视图)"><Sparkles :size="14" /></button>
                 <button @click.stop="openDesignTab({ connectionId: data.connectionId, schemaName: data.schemaName, tableName: '' })" class="text-green-500 hover:text-green-700 p-1" title="可视化新建表"><Plus :size="14" /></button>
               </span>
+              
               <span class="hidden group-hover:flex items-center gap-1 shrink-0" @click.stop v-if="data.type === 'table'">
                 <button @click.stop="openDesignTab(data)" class="text-blue-500 hover:text-blue-700 p-1" title="设计表结构"><Edit3 :size="14" /></button>
               </span>
-              <button @click.stop="openTablespaceTab(data)" class="text-purple-500 hover:text-purple-700 p-1" title="物理存储洞察(信创特有)">
-                <Database :size="12" />
-              </button>
             </div>
           </template>
         </el-tree>
@@ -374,6 +376,56 @@
                 </div>
               </div>
             </div>
+            <div v-else-if="tab.type === 'xc_assets'" class="h-full flex flex-col bg-slate-50 p-4" v-loading="tab.loading">
+              <div class="mb-4">
+                <h2 class="text-xl font-bold text-gray-800 flex items-center">
+                  <Sparkles class="w-6 h-6 mr-2 text-purple-600" />
+                  国产信创高级数据库资产 (Schema: {{ tab.schema }})
+                </h2>
+                <p class="text-gray-500 text-sm mt-1">突破通用工具局限，针对达梦/人大金仓底层架构，专属呈现序列、PL/SQL包及物化视图资源。</p>
+              </div>
+
+              <div class="flex-1 bg-white rounded-lg shadow-sm border p-2 overflow-hidden flex flex-col">
+                <el-tabs v-model="tab.activeSubTab" class="h-full flex flex-col">
+                  
+                  <el-tab-pane label="序列管理 (Sequences)" name="sequences" class="h-full">
+                    <el-table :data="tab.data?.sequences || []" height="100%" border stripe>
+                      <el-table-column prop="name" label="序列名称" width="250">
+                        <template #default="{row}"><span class="font-bold text-blue-700">{{ row.name }}</span></template>
+                      </el-table-column>
+                      <el-table-column prop="step" label="步长 (INCREMENT)" width="150" align="center" />
+                      <el-table-column prop="min" label="最小值 (MIN_VALUE)" align="right" />
+                      <el-table-column prop="max" label="最大值 (MAX_VALUE)" align="right" />
+                    </el-table>
+                  </el-tab-pane>
+
+                  <el-tab-pane label="核心逻辑库 (PL/SQL Packages)" name="packages" class="h-full flex flex-col">
+                    <div class="flex h-full gap-4">
+                      <div class="w-1/3 border rounded overflow-y-auto">
+                        <el-menu default-active="0" class="border-none">
+                          <el-menu-item v-for="(pkg, idx) in (tab.data?.packages || [])" :key="idx" :index="idx.toString()" @click="tab.selectedPkg = pkg.text">
+                            <FileCode2 class="w-4 h-4 mr-2 text-amber-600"/> {{ pkg.name }}
+                          </el-menu-item>
+                          <div v-if="!tab.data?.packages?.length" class="text-center text-gray-400 mt-10 text-sm">当前模式无包逻辑或数据库不支持</div>
+                        </el-menu>
+                      </div>
+                      <div class="w-2/3 border rounded bg-slate-800 text-green-400 p-4 overflow-y-auto relative">
+                        <pre class="text-sm font-mono whitespace-pre-wrap">{{ tab.selectedPkg || '-- 请在左侧选择代码资产查看源码 --' }}</pre>
+                      </div>
+                    </div>
+                  </el-tab-pane>
+
+                  <el-tab-pane label="物化视图 (Materialized Views)" name="mviews" class="h-full">
+                    <el-table :data="tab.data?.mviews || []" height="100%" border stripe>
+                      <el-table-column prop="name" label="视图名称">
+                         <template #default="{row}"><span class="font-bold text-teal-600">{{ row.name }}</span></template>
+                      </el-table-column>
+                    </el-table>
+                  </el-tab-pane>
+                  
+                </el-tabs>
+              </div>
+            </div>
           </el-tab-pane>
         </el-tabs>
       </div>
@@ -552,7 +604,7 @@ import ERDiagram from './components/ERDiagram.vue';
 import { 
   Plus, RefreshCw, Edit3, Trash2, Zap, Database, Table as TableIcon,
   Play, Settings, Sparkles, Bot, User, Send, ChevronDown, 
-  ArrowLeftToLine, FileCode2, Activity, Dna, BarChart2, PieChart, Share2
+  ArrowLeftToLine, FileCode2, Activity, Dna, BarChart2, PieChart, Share2, Shield, Lock
 } from 'lucide-vue-next';
 
 // ================= UI 基础状态 =================
@@ -784,6 +836,42 @@ const testConnection = async (config) => {
     else throw new Error(res.error);
   } catch(e) { ElMessage.error(`测试失败: ${e.message}`); } finally { loading.value = false; }
 };
+
+// 开启信创高级资产综合面板
+const openXinchuangAssets = async (data) => {
+  const conn = getConnectionById(data.connectionId);
+  if (conn.dbType === 'mysql') {
+    return ElMessage.warning('系统探针：通用 MySQL 架构不支持独立序列/包/物化视图的高级资产管理。');
+  }
+
+  const id = `xc_assets_${data.connectionId}_${data.schemaName}`;
+  if (!openTabs.value.find(t => t.id === id)) {
+    const tab = {
+      id, type: 'xc_assets', title: `信创资产: ${data.schemaName}`,
+      connectionId: data.connectionId, schema: data.schemaName,
+      loading: true, data: { sequences: [], packages: [], mviews: [] },
+      activeSubTab: 'sequences' // 默认打开序列面板
+    };
+    openTabs.value.push(tab);
+    activeTab.value = id;
+
+    try {
+      const res = await window.electronAPI.getXinchuangAssets({ connectionId: data.connectionId, schema: data.schemaName });
+      if (res.success) {
+        tab.data = res.data;
+      } else {
+        throw new Error(res.error);
+      }
+    } catch(e) {
+      ElMessage.error(`获取资产失败: ${e.message}`);
+    } finally {
+      tab.loading = false;
+    }
+  } else {
+    activeTab.value = id;
+  }
+};
+
 
 // 打开物理存储面板
 const openTablespaceTab = async (connData) => {
@@ -1665,6 +1753,13 @@ onErrorCaptured((err, instance, info) => {
 
 // 2. 拦截系统级 JS 错误（比如变量未定义、组件没找到）
 window.addEventListener('error', (event) => {
+  // 👇 过滤掉毫无意义的良性渲染警告 👇
+  if (event.message === 'ResizeObserver loop limit exceeded' || 
+      event.message === 'ResizeObserver loop completed with undelivered notifications.') {
+    event.stopImmediatePropagation();
+    return;
+  }
+  
   ElNotification({
     title: '系统级 JS 错误',
     message: event.message,

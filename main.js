@@ -422,3 +422,18 @@ ipcMain.handle('ai:smart-tuning', async (event, { connectionId, schema, sql }) =
     return { success: false, error: error.message };
   }
 });
+
+
+// 在 main.js 的 IPC 区域新增
+ipcMain.handle('db:get-xc-assets', async (event, { connectionId, schema }) => {
+  try {
+    const connections = store.get('db.connections', []);
+    const connection = connections.find(item => item.id === connectionId);
+    if (!connection) throw new Error('连接不存在');
+    
+    const data = await dbConnections.getXinchuangAssets(connection, { schema });
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
